@@ -3,6 +3,6 @@
 
 #include <signal.h>
 
-extern sig_atomic_t get_interrupted(void);
+sig_atomic_t get_interrupted(void);
 
 #endif

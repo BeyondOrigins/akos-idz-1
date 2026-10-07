@@ -15,7 +15,7 @@ static void on_sigint(int sig) {
     interrupted = 1;
 }
 
-extern sig_atomic_t get_interrupted(void) {
+sig_atomic_t get_interrupted(void) {
     return interrupted;
 }
 
