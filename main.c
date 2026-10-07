@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
             break;
     }
     if (cfg.animate) {
+        // копим кадр в буфере и выводим целиком, чтобы не мерцало
         setvbuf(stdout, NULL, _IOFBF, 1 << 16);
     }
     config_print(&cfg);

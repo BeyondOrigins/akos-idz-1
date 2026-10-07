@@ -8,10 +8,12 @@ void formation_plan(World* world) {
     formation->dy = 0;
     formation->next_dir = formation->dir;
 
+    // в этом такте строй стоит
     if (formation->ticks_until_move > 1 || world->aliens_alive == 0) {
         return;
     }
 
+    // ищем крайних живых: по ним считаем расстояние до стенки
     int min_x = world->width;
     int max_x = -1;
     for (int i = 0; i < world->alien_count; i++) {
@@ -28,6 +30,7 @@ void formation_plan(World* world) {
     }
 
     int room = formation->dir > 0 ? world->width - 1 - max_x : min_x;
+    // упёрлись в стенку: спускаемся и разворачиваемся
     if (room == 0) {
         formation->dy = 1;
         formation->next_dir = -formation->dir;
@@ -37,6 +40,7 @@ void formation_plan(World* world) {
     }
 }
 
+// пришельцы уже сдвинулись сами, здесь только счётчик и направление
 void formation_move(World* world) {
     Formation* formation = &world->formation;
     if (formation->ticks_until_move > 1) {

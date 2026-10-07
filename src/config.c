@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
+// коды длинных опций; с 256, чтобы не пересечься с символами
 enum {
     OPT_WIDTH = 256,
     OPT_HEIGHT,
@@ -87,6 +88,7 @@ void config_set_defaults(Config* cfg) {
     cfg->strategy = STRATEGY_HUNTER;
     cfg->max_ticks = 300;
     cfg->seed = 1;
+    // в терминале анимируем, в файл пишем кадры подряд
     cfg->animate = isatty(STDOUT_FILENO) != 0;
     cfg->delay_ms = DELAY_AUTO;
 }
@@ -132,6 +134,7 @@ void config_print_usage(const char* prog) {
         prog, MAX_SHIELDS, DEFAULT_ANIMATION_DELAY_MS);
 }
 
+// целое в диапазоне [min, max], иначе понятная ошибка
 bool parse_int(const char* text, const char* name, int min, int max, int* out) {
     char* end = NULL;
     errno = 0;
@@ -188,6 +191,7 @@ bool parse_shield(Config* cfg, const char* text) {
         return false;
     }
     ShieldSpec spec;
+    // tail ловит мусор после четвёртого числа
     char tail;
     if (sscanf(text, "%d,%d,%d,%d%c", &spec.x, &spec.y, &spec.width, &spec.hp, &tail) != 4) {
         fprintf(stderr, "Ошибка: --shield ожидает X,Y,W,HP, получено \"%s\"\n", text);
@@ -198,6 +202,7 @@ bool parse_shield(Config* cfg, const char* text) {
     return true;
 }
 
+// три укрытия над пушкой, если свои не задали
 void add_default_shields(Config* cfg) {
     int width = cfg->width / 8 < 2 ? 2 : cfg->width / 8;
     for (int i = 0; i < 3; i++) {
@@ -209,6 +214,7 @@ void add_default_shields(Config* cfg) {
     }
 }
 
+// проверяем, что всё помещается в поле
 bool config_validate(const Config* cfg) {
     int formation_width = (cfg->alien_cols - 1) * ALIEN_SPACING_X + 1;
     if (formation_width > cfg->width) {
@@ -249,7 +255,7 @@ bool config_validate(const Config* cfg) {
 
 ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
     int opt;
-    opterr = 0;
+    opterr = 0;  // об ошибках сообщаем сами
     while ((opt = getopt_long(argc, argv, "h", LONG_OPTIONS, NULL)) != -1) {
         bool ok = true;
         switch (opt) {

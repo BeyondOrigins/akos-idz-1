@@ -8,6 +8,7 @@
 #include "../include/formation.h"
 #include "../include/render.h"
 
+// во что попал снаряд
 typedef enum {
     HIT_NONE,
     HIT_SHOT,
@@ -25,6 +26,7 @@ const char* owner_text(const Projectile* shot) {
     return shot->owner == OWNER_CANNON ? "пушки" : "пришельца";
 }
 
+// пишем в журнал, кто куда сдвинулся
 void report_moves(World* world) {
     const Formation* formation = &world->formation;
     if (formation->dy != 0) {
@@ -44,6 +46,7 @@ void report_moves(World* world) {
     }
 }
 
+// пришелец, наехавший на укрытие, его сносит
 void crush_shields(World* world) {
     for (int i = 0; i < world->alien_count; i++) {
         const Alien* alien = &world->aliens[i];
@@ -59,6 +62,7 @@ void crush_shields(World* world) {
     }
 }
 
+// выпускаем снаряды тех, кто решил стрелять
 void spawn_shots(World* world) {
     const Cannon* cannon = &world->cannon;
     if (cannon->fired) {
@@ -82,6 +86,8 @@ void spawn_shots(World* world) {
     }
 }
 
+// встречные снаряды сталкиваются, если оказались в одной клетке
+// или только что проскочили друг сквозь друга
 bool shots_collide(const Projectile* a, const Projectile* b) {
     if (a->owner == b->owner || a->x != b->x) {
         return false;
@@ -94,6 +100,7 @@ bool shots_collide(const Projectile* a, const Projectile* b) {
     return up->moved && down->moved && up->y == down->y - 1;
 }
 
+// порядок проверок делает исход однозначным: снаряд, пришелец, укрытие, пушка
 Hit detect_hit(World* world, const Projectile* shot) {
     Hit hit = {HIT_NONE, NULL};
 
@@ -130,6 +137,7 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
 
     switch (hit.kind) {
         case HIT_SHOT:
+            // сталкиваются двое, а сообщение нужно одно
             if (shot->owner == OWNER_CANNON) {
                 events_add(events, false, shot->x, shot->y,
                            "Снаряд пушки #%d столкнулся со встречным снарядом в (%d,%d)", shot->id,
@@ -200,6 +208,8 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
     }
 }
 
+// сначала находим все попадания, потом применяем:
+// так результат не зависит от порядка снарядов в массиве
 void resolve_collisions(World* world) {
     if (world->shot_count == 0) {
         return;
@@ -222,6 +232,7 @@ void resolve_collisions(World* world) {
     free(hits);
 }
 
+// один шаг: снаряды сдвигаются на клетку (быстрые делают больше шагов)
 void advance_shots(World* world, int step) {
     world->step_stamp++;
     for (int i = 0; i < world->shot_count; i++) {
@@ -230,6 +241,7 @@ void advance_shots(World* world, int step) {
         if (!shot->active || shot->fresh || shot->speed < step) {
             continue;
         }
+        // каждый снаряд обрабатывается один раз за шаг
         INVARIANT(shot->moved_stamp != world->step_stamp);
         shot->moved_stamp = world->step_stamp;
 
@@ -245,6 +257,8 @@ void advance_shots(World* world, int step) {
     }
 }
 
+// летим по клетке за шаг и после каждого проверяем столкновения,
+// иначе быстрый снаряд перепрыгнул бы цель
 void move_shots(World* world) {
     int max_speed = 0;
     for (int i = 0; i < world->shot_count; i++) {
@@ -256,6 +270,7 @@ void move_shots(World* world) {
         }
     }
 
+    // строй мог наехать на снаряд ещё до его движения
     resolve_collisions(world);
     for (int step = 1; step <= max_speed; step++) {
         advance_shots(world, step);
@@ -282,6 +297,7 @@ bool aliens_reached_bottom(const World* world) {
     return false;
 }
 
+// убираем лишнее, проверяем инварианты и не пора ли заканчивать
 void update_field(World* world) {
     world_remove_inactive_shots(world);
     world_check_invariants(world);
@@ -305,6 +321,7 @@ void sleep_ms(int ms) {
     nanosleep(&pause, NULL);
 }
 
+// все только решают, что делать; мир пока не меняется
 void plan_actions(World* world) {
     formation_plan(world);
     for (int i = 0; i < world->alien_count; i++) {
@@ -315,6 +332,7 @@ void plan_actions(World* world) {
     cannon_plan(world, &world->cannon);
 }
 
+// теперь все выполняют задуманное
 void move_participants(World* world) {
     for (int i = 0; i < world->alien_count; i++) {
         if (world->aliens[i].alive) {
@@ -342,6 +360,7 @@ void field_run(World* world) {
         move_shots(world);
         update_field(world);
 
+        // поле показываем, только когда такт полностью отработал
         render_tick(world);
     }
 }

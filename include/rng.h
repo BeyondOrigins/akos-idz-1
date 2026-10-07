@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+// свой генератор (splitmix64): у каждого участника отдельное состояние,
+// поэтому результат не зависит от порядка их обхода
 typedef struct {
     uint64_t state;
 } Rng;
@@ -18,6 +20,7 @@ static inline uint64_t rng_next(Rng* rng) {
     return z ^ (z >> 31);
 }
 
+// число от 0 до n-1
 static inline int rng_below(Rng* rng, int n) {
     return (int)(rng_next(rng) % (uint64_t)n);
 }

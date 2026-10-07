@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// имя, символ, прочность, очки, множитель стрельбы
 const AlienTypeInfo ALIEN_TYPES[ALIEN_TYPE_COUNT] = {
     [ALIEN_GRUNT] = {"рядовой", 'W', 1, 10, 1},
     [ALIEN_SHOOTER] = {"стрелок", 'M', 1, 20, 2},
@@ -18,6 +19,7 @@ void* checked_calloc(size_t count, size_t size) {
     return ptr;
 }
 
+// расширенный режим: сверху броненосцы, под ними стрелки, внизу рядовые
 AlienType alien_type_for_row(const Config* cfg, int row) {
     if (!cfg->extended) {
         return ALIEN_GRUNT;
@@ -37,6 +39,7 @@ void init_aliens(World* world) {
     world->aliens_alive = world->alien_count;
     world->aliens = checked_calloc((size_t)world->alien_count, sizeof(Alien));
 
+    // ставим строй по центру
     int formation_width = (cfg->alien_cols - 1) * ALIEN_SPACING_X + 1;
     int left = (world->width - formation_width) / 2;
     for (int row = 0; row < cfg->alien_rows; row++) {
@@ -49,6 +52,7 @@ void init_aliens(World* world) {
             alien->y = ALIEN_TOP_ROW + row;
             alien->hp = ALIEN_TYPES[alien->type].hp;
             alien->alive = true;
+            // у каждого пришельца свой генератор, зерно зависит от id
             rng_seed(&alien->rng, cfg->seed ^ (0x9E3779B97F4A7C15ULL * (uint64_t)alien->id));
         }
     }
@@ -166,6 +170,7 @@ Projectile* world_add_shot(World* world, OwnerKind owner, int owner_id, int x, i
     return shot;
 }
 
+// убираем отлетавшие снаряды; уцелевшие со следующего такта летят
 void world_remove_inactive_shots(World* world) {
     int kept = 0;
     for (int i = 0; i < world->shot_count; i++) {
@@ -183,6 +188,7 @@ void world_invariant_failed(const char* cond, const char* file, int line) {
     abort();
 }
 
+// проверка в конце такта: никто не вышел за поле, счётчики сходятся
 void world_check_invariants(const World* world) {
     int alive = 0;
     for (int i = 0; i < world->alien_count; i++) {
@@ -204,6 +210,7 @@ void world_check_invariants(const World* world) {
         const Projectile* shot = &world->shots[i];
         INVARIANT(shot->active);
         INVARIANT(world_in_bounds(world, shot->x, shot->y));
+        // у снаряда один хозяин: пушка стреляет вверх, пришельцы вниз
         if (shot->owner == OWNER_CANNON) {
             INVARIANT(shot->owner_id == 0 && shot->dir == -1);
         } else {

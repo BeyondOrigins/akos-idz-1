@@ -20,6 +20,7 @@ void events_clear(EventLog* log) {
 }
 
 void events_add(EventLog* log, bool verbose, int x, int y, const char* fmt, ...) {
+    // место кончилось, удваиваем
     if (log->count == log->capacity) {
         int capacity = log->capacity == 0 ? 32 : log->capacity * 2;
         Event* items = realloc(log->items, (size_t)capacity * sizeof(Event));

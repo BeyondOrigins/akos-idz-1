@@ -6,6 +6,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+// чем рисуем; пришельцы идут своим символом, укрытие цифрой прочности
 #define GLYPH_EMPTY ' '
 #define GLYPH_CANNON 'A'
 #define GLYPH_CANNON_SHOT '|'
@@ -29,6 +30,7 @@ void print_field(const World* world) {
     }
     memset(cells, GLYPH_EMPTY, (size_t)(width * height));
 
+    // слои снизу вверх: вспышки попаданий, укрытия, снаряды, пушка, пришельцы
     for (int i = 0; i < world->events.count; i++) {
         const Event* event = &world->events.items[i];
         if (event->x != EVENT_NO_CELL && world_in_bounds(world, event->x, event->y)) {
@@ -71,6 +73,7 @@ bool event_visible(const World* world, const Event* event) {
     return !event->verbose || world->cfg.verbose;
 }
 
+// печатает не больше limit строк; если событий больше, пишет, сколько скрыто
 int print_events(const World* world, int limit) {
     int visible = 0;
     for (int i = 0; i < world->events.count; i++) {
@@ -93,11 +96,13 @@ int print_events(const World* world, int limit) {
     return shown;
 }
 
+// сколько событий влезет под полем, чтобы экран не прокручивался
 int animated_events_limit(const World* world) {
     struct winsize size;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0) {
         return world->events.count;
     }
+    // 6 строк заняты: заголовок, две рамки, статус, пустая и строка курсора
     int limit = size.ws_row - (world->height + 6);
     return limit < 1 ? 1 : limit;
 }
@@ -117,9 +122,12 @@ void print_status(const World* world) {
 }
 
 void render_tick(const World* world) {
+    // высота прошлого кадра: столько строк надо стереть
     static int previous_lines = 0;
 
     if (world->cfg.animate) {
+        // поднимаемся к началу прошлого кадра и стираем всё ниже;
+        // перенос строк на время кадра выключаем, иначе собьётся счёт строк
         if (previous_lines > 0) {
             printf("\033[%dA", previous_lines);
         }
@@ -127,8 +135,10 @@ void render_tick(const World* world) {
         print_header(world);
         print_field(world);
         print_status(world);
+        // события под полем: их число скачет, а поле должно стоять на месте
         int event_lines = print_events(world, animated_events_limit(world));
         printf("\033[?7h\n");
+        // заголовок + поле с рамками + статус + события + пустая строка
         previous_lines = world->height + 5 + event_lines;
     } else {
         print_header(world);

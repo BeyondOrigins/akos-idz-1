@@ -4,6 +4,7 @@
 
 #include "../include/world.h"
 
+// на сколько тактов вперёд dodger высматривает вражеские снаряды
 #define THREAT_HORIZON_TICKS 3
 
 int sign(int value) {
@@ -14,12 +15,14 @@ int clamp(int value, int min, int max) {
     return value < min ? min : value > max ? max : value;
 }
 
+// где окажется пришелец, когда до него долетит снаряд
 int predict_alien_x(const World* world, const Alien* alien) {
     const Formation* formation = &world->formation;
     const Cannon* cannon = &world->cannon;
 
     int distance = cannon->y - 1 - alien->y;
     int speed = world->cfg.cannon_shot_speed;
+    // тактов до попадания (в такт выстрела снаряд ещё стоит)
     int flight = 1 + (distance + speed - 1) / speed;
 
     int moves = 0;
@@ -44,6 +47,7 @@ bool column_has_target(const World* world, int x, bool predict) {
     return false;
 }
 
+// летит ли в этот столбец вражеский снаряд, который скоро долетит
 bool column_is_threatened(const World* world, int x) {
     const Cannon* cannon = &world->cannon;
     for (int i = 0; i < world->shot_count; i++) {
@@ -59,6 +63,7 @@ bool column_is_threatened(const World* world, int x) {
     return false;
 }
 
+// шаг к ближайшей цели; столбцы под укрытием в последнюю очередь
 int step_toward_target(const World* world) {
     const Cannon* cannon = &world->cannon;
     int best_x = cannon->x;
@@ -81,6 +86,7 @@ int step_toward_target(const World* world) {
     return sign(best_x - cannon->x);
 }
 
+// стрелять есть смысл, если над нами цель и на пути нет своего укрытия
 bool should_fire_from(const World* world, int x, bool predict) {
     return column_has_target(world, x, predict) && !world_column_has_shield(world, x);
 }
@@ -103,6 +109,7 @@ void plan_dodger(const World* world, Cannon* cannon) {
     int preferred = step_toward_target(world);
     int dx = preferred;
 
+    // под обстрелом уходим в безопасную сторону, по возможности к цели
     if (column_is_threatened(world, cannon->x)) {
         int first = preferred != 0 ? preferred : 1;
         int candidates[2] = {first, -first};
@@ -143,6 +150,7 @@ void cannon_plan(const World* world, Cannon* cannon) {
             break;
     }
 
+    // за край поля не выезжаем, без снарядов не стреляем
     int target_x = clamp(cannon->x + cannon->dx, 0, world->width - 1);
     cannon->dx = target_x - cannon->x;
     if (cannon->ammo == 0) {
