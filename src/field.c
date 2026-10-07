@@ -7,6 +7,8 @@
 #include "../include/cannon.h"
 #include "../include/formation.h"
 #include "../include/render.h"
+#include "../include/interrupted.h"
+#include "world.h"
 
 // во что попал снаряд
 typedef enum {
@@ -347,6 +349,10 @@ void field_run(World* world) {
     render_tick(world);
 
     while (world->outcome == OUTCOME_RUNNING) {
+        if (get_interrupted() == 1) {
+            world->outcome = OUTCOME_INTERRUPTED;
+            return;
+        }
         sleep_ms(world->cfg.delay_ms);
         world->tick++;
         events_clear(&world->events);

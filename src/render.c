@@ -1,4 +1,5 @@
 #include "../include/render.h"
+#include "world.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -160,6 +161,8 @@ const char* outcome_text(Outcome outcome) {
             return "поражение — пришельцы достигли нижней границы";
         case OUTCOME_TIMEOUT:
             return "исчерпано предельное число тактов";
+        case OUTCOME_INTERRUPTED:
+            return "игра прервана";
         case OUTCOME_RUNNING:
             break;
     }

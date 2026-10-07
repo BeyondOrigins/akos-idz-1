@@ -96,6 +96,7 @@ typedef enum {
     OUTCOME_CANNON_DESTROYED,  // проигрыш - пушка уничтожена
     OUTCOME_INVASION,          // проигрыш - пришелец добрался до нижней границы
     OUTCOME_TIMEOUT,           // исчерпано число тактов
+    OUTCOME_INTERRUPTED,       // программа прервана через Ctrl + C
 } Outcome;
 
 typedef struct World {
