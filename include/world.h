@@ -7,7 +7,7 @@
 #include "events.h"
 #include "rng.h"
 
-// как assert, но работает и в релизной сборке
+// проверка инварианта
 #define INVARIANT(cond)                                                              \
     do {                                                                             \
         if (!(cond)) {                                                               \
@@ -16,15 +16,15 @@
     } while (0)
 
 typedef enum {
-    ALIEN_GRUNT,
-    ALIEN_SHOOTER,
-    ALIEN_TANK,
-    ALIEN_TYPE_COUNT,
+    ALIEN_GRUNT,      // рядовой
+    ALIEN_SHOOTER,    // стрелок
+    ALIEN_TANK,       // танк
+    ALIEN_TYPE_COUNT, // количество типов
 } AlienType;
 
 typedef struct {
     const char* name;
-    char glyph;
+    char glyph;           // каким символом рисуется
     int hp;
     int score;
     int fire_multiplier;  // во сколько раз чаще стреляет
@@ -45,8 +45,9 @@ typedef struct {
     bool wants_fire;  // решение на этот такт
 } Alien;
 
+// координатор строя
 typedef struct {
-    int dir;  // +1 вправо, -1 влево
+    int dir;               // +1 вправо, -1 влево
     int ticks_until_move;  // 1: ходит уже в этом такте
 
     // план на этот такт
@@ -77,24 +78,24 @@ typedef enum {
 typedef struct {
     int id;
     OwnerKind owner;
-    int owner_id;  // id пришельца, для пушки 0
+    int owner_id;              // id пришельца, для пушки 0
     int x;
     int y;
-    int dir;  // -1 вверх, +1 вниз
+    int dir;                   // -1 вверх, +1 вниз
     int speed;
     bool active;
-    bool fresh;  // только что выпущен, в этом такте не летит
-    bool moved;  // сдвинулся на текущем шаге
-    int tick_start_y;  // где был в начале такта
-    unsigned long moved_stamp;  // защита от двойной обработки за шаг
+    bool fresh;                // только что выпущен, в этом такте не летит
+    bool moved;                // сдвинулся на текущем шаге
+    int tick_start_y;          // где был в начале такта
+    unsigned long moved_stamp; // защита от двойной обработки за шаг
 } Projectile;
 
 typedef enum {
-    OUTCOME_RUNNING,
-    OUTCOME_VICTORY,
-    OUTCOME_CANNON_DESTROYED,
-    OUTCOME_INVASION,
-    OUTCOME_TIMEOUT,
+    OUTCOME_RUNNING,          // в процессе игры
+    OUTCOME_VICTORY,          // победа
+    OUTCOME_CANNON_DESTROYED, // проигрыш - пушка уничтожена
+    OUTCOME_INVASION,         // проигрыш - пришелец добрался до нижней границы
+    OUTCOME_TIMEOUT,          // исчерпано число тактов
 } Outcome;
 
 typedef struct World {
@@ -112,7 +113,7 @@ typedef struct World {
     int aliens_alive;
     Cannon cannon;
 
-    int* shields;  // прочность укрытия в каждой клетке, 0 = пусто
+    int* shields;              // прочность укрытия в каждой клетке, 0 = пусто
 
     Projectile* shots;
     int shot_count;
