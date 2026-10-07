@@ -15,10 +15,10 @@
 #define DEFAULT_ANIMATION_DELAY_MS 150
 
 typedef enum {
-    STRATEGY_HUNTER,  // идёт к ближайшей цели, стреляет с упреждением
+    STRATEGY_HUNTER,   // идёт к ближайшей цели, стреляет с упреждением
     STRATEGY_SWEEPER,  // ездит от края до края
-    STRATEGY_DODGER,  // как hunter, но сначала уворачивается
-    STRATEGY_RANDOM,  // всё наугад
+    STRATEGY_DODGER,   // как hunter, но сначала уворачивается
+    STRATEGY_RANDOM,   // всё наугад
 } Strategy;
 
 // полоска укрытия: width клеток в строке y, начиная с x

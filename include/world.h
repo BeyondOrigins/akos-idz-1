@@ -16,10 +16,10 @@
     } while (0)
 
 typedef enum {
-    ALIEN_GRUNT,      // рядовой
-    ALIEN_SHOOTER,    // стрелок
-    ALIEN_TANK,       // танк
-    ALIEN_TYPE_COUNT, // количество типов
+    ALIEN_GRUNT,       // рядовой
+    ALIEN_SHOOTER,     // стрелок
+    ALIEN_TANK,        // танк
+    ALIEN_TYPE_COUNT,  // количество типов
 } AlienType;
 
 typedef struct {
@@ -78,24 +78,24 @@ typedef enum {
 typedef struct {
     int id;
     OwnerKind owner;
-    int owner_id;              // id пришельца, для пушки 0
+    int owner_id;               // id пришельца, для пушки 0
     int x;
     int y;
-    int dir;                   // -1 вверх, +1 вниз
+    int dir;                    // -1 вверх, +1 вниз
     int speed;
     bool active;
-    bool fresh;                // только что выпущен, в этом такте не летит
-    bool moved;                // сдвинулся на текущем шаге
-    int tick_start_y;          // где был в начале такта
-    unsigned long moved_stamp; // защита от двойной обработки за шаг
+    bool fresh;                 // только что выпущен, в этом такте не летит
+    bool moved;                 // сдвинулся на текущем шаге
+    int tick_start_y;           // где был в начале такта
+    unsigned long moved_stamp;  // защита от двойной обработки за шаг
 } Projectile;
 
 typedef enum {
-    OUTCOME_RUNNING,          // в процессе игры
-    OUTCOME_VICTORY,          // победа
-    OUTCOME_CANNON_DESTROYED, // проигрыш - пушка уничтожена
-    OUTCOME_INVASION,         // проигрыш - пришелец добрался до нижней границы
-    OUTCOME_TIMEOUT,          // исчерпано число тактов
+    OUTCOME_RUNNING,           // в процессе игры
+    OUTCOME_VICTORY,           // победа
+    OUTCOME_CANNON_DESTROYED,  // проигрыш - пушка уничтожена
+    OUTCOME_INVASION,          // проигрыш - пришелец добрался до нижней границы
+    OUTCOME_TIMEOUT,           // исчерпано число тактов
 } Outcome;
 
 typedef struct World {

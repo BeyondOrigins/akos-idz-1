@@ -9,7 +9,7 @@
 typedef struct {
     char text[192];
     bool verbose;  // только с --verbose
-    int x;  // клетка столкновения или EVENT_NO_CELL
+    int x;         // клетка столкновения или EVENT_NO_CELL
     int y;
 } Event;
 
