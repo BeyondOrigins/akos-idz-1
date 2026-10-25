@@ -1,0 +1,5 @@
+# Стратегия dodger в расширенном режиме
+args: --extended --strategy dodger --seed 3
+exit: 0
+expect: Итог: исчерпано предельное число тактов
+expect: Тактов: 300, счёт: 310

@@ -1,0 +1,5 @@
+# Быстрые снаряды с обеих сторон: проверка столкновений встречных снарядов
+args: --shot-speed 5 --alien-shot-speed 3 --fire-rate 15 --extended --seed 2
+exit: 0
+expect: Итог:
+expect: столкновений встречных
