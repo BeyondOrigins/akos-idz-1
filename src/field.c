@@ -3,12 +3,15 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "../include/alien.h"
-#include "../include/cannon.h"
-#include "../include/formation.h"
+#include "../include/actors.h"
+#include "../include/journal.h"
 #include "../include/render.h"
-#include "../include/interrupted.h"
-#include "world.h"
+#include "../include/signals.h"
+#include "../include/sync.h"
+#include "../include/world.h"
+
+// пауза между тактами делится на кусочки, чтобы быстро заметить сигнал остановки
+#define PAUSE_SLICE_MS 10
 
 // во что попал снаряд
 typedef enum {
@@ -28,26 +31,6 @@ const char* owner_text(const Projectile* shot) {
     return shot->owner == OWNER_CANNON ? "пушки" : "пришельца";
 }
 
-// пишем в журнал, кто куда сдвинулся
-void report_moves(World* world) {
-    const Formation* formation = &world->formation;
-    if (formation->dy != 0) {
-        events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
-                   "Строй достиг границы: опустился на строку и развернулся %s",
-                   formation->dir > 0 ? "вправо" : "влево");
-    } else if (formation->dx != 0) {
-        events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
-                   "Строй сместился на %d %s", abs(formation->dx),
-                   formation->dx > 0 ? "вправо" : "влево");
-    }
-
-    const Cannon* cannon = &world->cannon;
-    if (cannon->dx != 0) {
-        events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
-                   "Пушка переместилась в столбец %d", cannon->x);
-    }
-}
-
 // пришелец, наехавший на укрытие, его сносит
 void crush_shields(World* world) {
     for (int i = 0; i < world->alien_count; i++) {
@@ -58,13 +41,17 @@ void crush_shields(World* world) {
         int* shield = world_shield_at(world, alien->x, alien->y);
         if (*shield > 0) {
             *shield = 0;
+            mutex_lock(&world->stats_lock);
+            world->stats.shield_cells_destroyed++;
+            mutex_unlock(&world->stats_lock);
             events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
                        "Пришелец #%d раздавил укрытие в (%d,%d)", alien->id, alien->x, alien->y);
         }
     }
 }
 
-// выпускаем снаряды тех, кто решил стрелять
+// выпускаем снаряды тех, кто выстрелил в фазе перемещения;
+// номера снарядам раздаёт координатор, поэтому они не зависят от порядка потоков
 void spawn_shots(World* world) {
     const Cannon* cannon = &world->cannon;
     if (cannon->fired) {
@@ -77,7 +64,7 @@ void spawn_shots(World* world) {
 
     for (int i = 0; i < world->alien_count; i++) {
         const Alien* alien = &world->aliens[i];
-        if (!alien->alive || !alien->wants_fire || !world_in_bounds(world, alien->x, alien->y + 1)) {
+        if (!alien->alive || !alien->fired) {
             continue;
         }
         Projectile* shot = world_add_shot(world, OWNER_ALIEN, alien->id, alien->x, alien->y + 1, 1,
@@ -135,12 +122,14 @@ Hit detect_hit(World* world, const Projectile* shot) {
 
 void apply_hit(World* world, Projectile* shot, Hit hit) {
     EventLog* events = &world->events;
+    Stats* stats = &world->stats;
     shot->active = false;
 
     switch (hit.kind) {
         case HIT_SHOT:
             // сталкиваются двое, а сообщение нужно одно
             if (shot->owner == OWNER_CANNON) {
+                stats->shot_collisions++;
                 events_add(events, false, shot->x, shot->y,
                            "Снаряд пушки #%d столкнулся со встречным снарядом в (%d,%d)", shot->id,
                            shot->x, shot->y);
@@ -153,6 +142,7 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
                 break;
             }
             alien->hp--;
+            stats->cannon_hits++;
             if (alien->hp > 0) {
                 events_add(events, false, shot->x, shot->y,
                            "Снаряд #%d повредил пришельца #%d (%s), осталось прочности: %d",
@@ -162,6 +152,7 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
             alien->alive = false;
             world->aliens_alive--;
             world->score += ALIEN_TYPES[alien->type].score;
+            stats->kills[alien->type]++;
             events_add(events, false, shot->x, shot->y,
                        "Снаряд #%d уничтожил пришельца #%d (%s) в (%d,%d)", shot->id, alien->id,
                        ALIEN_TYPES[alien->type].name, alien->x, alien->y);
@@ -176,6 +167,10 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
                 break;
             }
             (*shield)--;
+            stats->shield_hits++;
+            if (*shield == 0) {
+                stats->shield_cells_destroyed++;
+            }
             if (*shield > 0) {
                 events_add(events, false, EVENT_NO_CELL, EVENT_NO_CELL,
                            "Снаряд %s #%d повредил укрытие в (%d,%d), осталось прочности: %d",
@@ -194,6 +189,7 @@ void apply_hit(World* world, Projectile* shot, Hit hit) {
                 break;
             }
             cannon->lives--;
+            stats->cannon_damage++;
             if (cannon->lives > 0) {
                 events_add(events, false, EVENT_NO_CELL, EVENT_NO_CELL,
                            "Снаряд пришельца #%d попал в пушку, осталось жизней: %d", shot->id,
@@ -226,11 +222,15 @@ void resolve_collisions(World* world) {
             hits[i] = detect_hit(world, &world->shots[i]);
         }
     }
+    // статистику в это время никто, кроме координатора, не меняет,
+    // но правило одно: общая статистика меняется только под мьютексом
+    mutex_lock(&world->stats_lock);
     for (int i = 0; i < world->shot_count; i++) {
         if (hits[i].kind != HIT_NONE) {
             apply_hit(world, &world->shots[i], hits[i]);
         }
     }
+    mutex_unlock(&world->stats_lock);
     free(hits);
 }
 
@@ -250,6 +250,9 @@ void advance_shots(World* world, int step) {
         int y = shot->y + shot->dir;
         if (!world_in_bounds(world, shot->x, y)) {
             shot->active = false;
+            mutex_lock(&world->stats_lock);
+            world->stats.shots_left_field++;
+            mutex_unlock(&world->stats_lock);
             events_add(&world->events, true, EVENT_NO_CELL, EVENT_NO_CELL,
                        "Снаряд %s #%d покинул поле", owner_text(shot), shot->id);
             continue;
@@ -299,18 +302,33 @@ bool aliens_reached_bottom(const World* world) {
     return false;
 }
 
+// поток уничтоженного пришельца больше не нужен: завершаем его
+void stop_dead_aliens(World* world) {
+    for (int i = 0; i < world->alien_count; i++) {
+        Actor* actor = &world->actors[ACTOR_ALIENS_BASE + i];
+        if (actor->running && !world->aliens[i].alive) {
+            actors_stop(world, actor);
+            events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
+                       "Поток пришельца #%d завершён, работает потоков-участников: %d",
+                       world->aliens[i].id, world->actors_running);
+        }
+    }
+}
+
 // убираем лишнее, проверяем инварианты и не пора ли заканчивать
 void update_field(World* world) {
     world_remove_inactive_shots(world);
+    stop_dead_aliens(world);
     world_check_invariants(world);
 
+    bool tick_limit = world->tick_limit_enabled && world->cfg.max_ticks > 0;
     if (world->cannon.lives == 0) {
         world->outcome = OUTCOME_CANNON_DESTROYED;
     } else if (aliens_reached_bottom(world)) {
         world->outcome = OUTCOME_INVASION;
     } else if (world->aliens_alive == 0) {
         world->outcome = OUTCOME_VICTORY;
-    } else if (world->tick >= world->cfg.max_ticks) {
+    } else if (tick_limit && world->tick >= world->cfg.max_ticks) {
         world->outcome = OUTCOME_TIMEOUT;
     }
 }
@@ -323,50 +341,92 @@ void sleep_ms(int ms) {
     nanosleep(&pause, NULL);
 }
 
-// все только решают, что делать; мир пока не меняется
-void plan_actions(World* world) {
-    formation_plan(world);
-    for (int i = 0; i < world->alien_count; i++) {
-        if (world->aliens[i].alive) {
-            alien_plan(world, &world->aliens[i]);
-        }
+Outcome outcome_for_stop(StopReason reason) {
+    switch (reason) {
+        case STOP_INTERRUPT:
+            return OUTCOME_INTERRUPTED;
+        case STOP_TERMINATE:
+            return OUTCOME_TERMINATED;
+        case STOP_TIME_LIMIT:
+            return OUTCOME_TIME_LIMIT;
+        case STOP_NONE:
+            break;
     }
-    cannon_plan(world, &world->cannon);
+    return OUTCOME_RUNNING;
 }
 
-// теперь все выполняют задуманное
-void move_participants(World* world) {
-    for (int i = 0; i < world->alien_count; i++) {
-        if (world->aliens[i].alive) {
-            alien_move(world, &world->aliens[i]);
+// пауза перед тактом; false, если пришёл сигнал остановки и такт начинать не надо
+bool pause_before_tick(World* world) {
+    int left = world->cfg.delay_ms;
+    for (;;) {
+        StopReason stop = signals_stop_reason();
+        if (stop != STOP_NONE) {
+            world->outcome = outcome_for_stop(stop);
+            return false;
         }
+        if (left <= 0) {
+            return true;
+        }
+        int slice = left < PAUSE_SLICE_MS ? left : PAUSE_SLICE_MS;
+        sleep_ms(slice);
+        left -= slice;
     }
-    cannon_move(world, &world->cannon);
-    formation_move(world);
+}
+
+// сообщения потока сигналов попадают в события такта
+void handle_signal_requests(World* world) {
+    char notes[MAX_SIGNAL_NOTES][SIGNAL_NOTE_SIZE];
+    int count = signals_take_notes(notes, MAX_SIGNAL_NOTES);
+    for (int i = 0; i < count; i++) {
+        events_add_from(&world->events, EVENT_SOURCE_SIGNALS, false, EVENT_NO_CELL, EVENT_NO_CELL,
+                        "%s", notes[i]);
+    }
+    world->tick_limit_enabled = signals_tick_limit_enabled();
+
+    if (signals_take_report_request()) {
+        events_add_from(&world->events, EVENT_SOURCE_SIGNALS, false, EVENT_NO_CELL, EVENT_NO_CELL,
+                        "Отчёт перед тактом %d: счёт %d, пришельцев %d из %d, жизней %d, "
+                        "снарядов %d, потоков-участников %d",
+                        world->tick, world->score, world->aliens_alive, world->alien_count,
+                        world->cannon.lives, world->cannon.ammo, world->actors_running);
+    }
+}
+
+void publish_tick(World* world) {
+    events_sort(&world->events);
+    render_tick(world);
+    journal_tick(world);
 }
 
 void field_run(World* world) {
-    render_tick(world);
+    publish_tick(world);
 
     while (world->outcome == OUTCOME_RUNNING) {
-        if (get_interrupted() == 1) {
-            world->outcome = OUTCOME_INTERRUPTED;
-            return;
+        if (!pause_before_tick(world)) {
+            break;
         }
-        sleep_ms(world->cfg.delay_ms);
         world->tick++;
         events_clear(&world->events);
+        handle_signal_requests(world);
 
-        plan_actions(world);
-        move_participants(world);
+        // фаза 1: все участники в своих потоках решают, что делать; мир не меняется
+        actors_run_phase(world, COMMAND_PLAN);
+        // фаза 2: каждый поток применяет своё решение к своим данным
+        actors_run_phase(world, COMMAND_MOVE);
 
-        report_moves(world);
+        // фазы 3-5 выполняет координатор, потоки участников в это время ждут
         crush_shields(world);
         spawn_shots(world);
         move_shots(world);
         update_field(world);
 
         // поле показываем, только когда такт полностью отработал
-        render_tick(world);
+        publish_tick(world);
     }
+
+    actors_stop_all(world);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    world->elapsed_sec = (double)(now.tv_sec - world->started_at.tv_sec) +
+                         (double)(now.tv_nsec - world->started_at.tv_nsec) / 1e9;
 }

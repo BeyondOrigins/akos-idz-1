@@ -1,5 +1,7 @@
 #include "../include/render.h"
-#include "world.h"
+
+#include "../include/signals.h"
+#include "../include/world.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,18 +110,20 @@ int animated_events_limit(const World* world) {
     return limit < 1 ? 1 : limit;
 }
 
-void print_header(const World* world) {
+void render_header(const World* world, FILE* out) {
     if (world->tick == 0) {
-        printf("=== Начальное состояние ===\n");
+        fprintf(out, "=== Начальное состояние ===\n");
     } else {
-        printf("=== Такт %d ===\n", world->tick);
+        fprintf(out, "=== Такт %d ===\n", world->tick);
     }
 }
 
-void print_status(const World* world) {
-    printf("Счёт: %d | Жизни: %d | Снаряды: %d | Пришельцев: %d | Снарядов в полёте: %d\n",
-           world->score, world->cannon.lives, world->cannon.ammo, world->aliens_alive,
-           world->shot_count);
+void render_status(const World* world, FILE* out) {
+    fprintf(out,
+            "Счёт: %d | Жизни: %d | Снаряды: %d | Пришельцев: %d | Снарядов в полёте: %d | "
+            "Потоков: %d\n",
+            world->score, world->cannon.lives, world->cannon.ammo, world->aliens_alive,
+            world->shot_count, world->actors_running);
 }
 
 void render_tick(const World* world) {
@@ -133,19 +137,19 @@ void render_tick(const World* world) {
             printf("\033[%dA", previous_lines);
         }
         printf("\r\033[J\033[?7l");
-        print_header(world);
+        render_header(world, stdout);
         print_field(world);
-        print_status(world);
+        render_status(world, stdout);
         // события под полем: их число скачет, а поле должно стоять на месте
         int event_lines = print_events(world, animated_events_limit(world));
         printf("\033[?7h\n");
         // заголовок + поле с рамками + статус + события + пустая строка
         previous_lines = world->height + 5 + event_lines;
     } else {
-        print_header(world);
+        render_header(world, stdout);
         print_events(world, world->events.count);
         print_field(world);
-        print_status(world);
+        render_status(world, stdout);
         printf("\n");
     }
     fflush(stdout);
@@ -161,18 +165,51 @@ const char* outcome_text(Outcome outcome) {
             return "поражение — пришельцы достигли нижней границы";
         case OUTCOME_TIMEOUT:
             return "исчерпано предельное число тактов";
+        case OUTCOME_TIME_LIMIT:
+            return "истекло время моделирования (SIGALRM)";
         case OUTCOME_INTERRUPTED:
-            return "игра прервана";
+            return "игра прервана (SIGINT)";
+        case OUTCOME_TERMINATED:
+            return "игра остановлена (SIGTERM)";
         case OUTCOME_RUNNING:
             break;
     }
     return "игра не завершена";
 }
 
-void render_summary(const World* world) {
-    printf("=== Игра завершена ===\n");
-    printf("Итог: %s\n", outcome_text(world->outcome));
-    printf("Тактов: %d, счёт: %d, уничтожено пришельцев: %d из %d\n", world->tick, world->score,
-           world->alien_count - world->aliens_alive, world->alien_count);
-    printf("Осталось жизней: %d, снарядов: %d\n", world->cannon.lives, world->cannon.ammo);
+// доля в процентах; при нулевом знаменателе 0
+double percent(int part, int whole) {
+    return whole > 0 ? 100.0 * part / whole : 0.0;
+}
+
+void render_summary(const World* world, FILE* out) {
+    const Stats* stats = &world->stats;
+    fprintf(out, "=== Игра завершена ===\n");
+    fprintf(out, "Итог: %s\n", outcome_text(world->outcome));
+    fprintf(out, "Тактов: %d, счёт: %d, уничтожено пришельцев: %d из %d\n", world->tick,
+            world->score, world->alien_count - world->aliens_alive, world->alien_count);
+    fprintf(out, "Осталось жизней: %d, снарядов: %d\n", world->cannon.lives, world->cannon.ammo);
+
+    fprintf(out, "Статистика:\n");
+    fprintf(out, "  пушка: выстрелов %d, попаданий в пришельцев %d (точность %.1f%%), "
+                 "перемещений %d\n",
+            stats->cannon_shots, stats->cannon_hits,
+            percent(stats->cannon_hits, stats->cannon_shots), stats->cannon_moves);
+    fprintf(out, "  пришельцы: выстрелов %d, попаданий в пушку %d\n", stats->alien_shots,
+            stats->cannon_damage);
+    fprintf(out, "  уничтожено по типам:");
+    int types = world->cfg.extended ? ALIEN_TYPE_COUNT : 1;
+    for (int type = 0; type < types; type++) {
+        fprintf(out, "%s %s %d", type == 0 ? "" : ",", ALIEN_TYPES[type].name, stats->kills[type]);
+    }
+    fprintf(out, "\n");
+    fprintf(out, "  строй: сдвигов %d, спусков %d\n", stats->formation_steps,
+            stats->formation_descents);
+    fprintf(out, "  укрытия: попаданий %d, разрушено клеток %d\n", stats->shield_hits,
+            stats->shield_cells_destroyed);
+    fprintf(out, "  снаряды: столкновений встречных %d, покинули поле %d\n",
+            stats->shot_collisions, stats->shots_left_field);
+    fprintf(out, "  потоков-участников создано: %d, обработано сигналов: %d\n",
+            world->actor_count, signals_received());
+    fprintf(out, "  время работы: %.2f с\n", world->elapsed_sec);
 }

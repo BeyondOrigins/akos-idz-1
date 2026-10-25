@@ -31,6 +31,9 @@ enum {
     OPT_ANIMATE,
     OPT_NO_ANIMATE,
     OPT_VERBOSE,
+    OPT_TIME_LIMIT,
+    OPT_LOG,
+    OPT_NO_LOG,
     OPT_HELP,
 };
 
@@ -56,6 +59,9 @@ const struct option LONG_OPTIONS[] = {
     {"animate", no_argument, NULL, OPT_ANIMATE},
     {"no-animate", no_argument, NULL, OPT_NO_ANIMATE},
     {"verbose", no_argument, NULL, OPT_VERBOSE},
+    {"time-limit", required_argument, NULL, OPT_TIME_LIMIT},
+    {"log", required_argument, NULL, OPT_LOG},
+    {"no-log", no_argument, NULL, OPT_NO_LOG},
     {"help", no_argument, NULL, OPT_HELP},
     {NULL, 0, NULL, 0},
 };
@@ -91,6 +97,7 @@ void config_set_defaults(Config* cfg) {
     // в терминале анимируем, в файл пишем кадры подряд
     cfg->animate = isatty(STDOUT_FILENO) != 0;
     cfg->delay_ms = DELAY_AUTO;
+    cfg->log_path = DEFAULT_LOG_PATH;
 }
 
 void config_print_usage(const char* prog) {
@@ -123,15 +130,24 @@ void config_print_usage(const char* prog) {
         "                        включает расширенный режим\n"
         "\n"
         "Моделирование и вывод:\n"
-        "  --ticks N             предельное число тактов (по умолчанию 300)\n"
+        "  --ticks N             предельное число тактов (по умолчанию 300);\n"
+        "                        0 — без предела, до исхода игры или прерывания\n"
+        "  --time-limit SEC      остановить игру через SEC секунд (SIGALRM)\n"
         "  --seed N              зерно генератора случайных чисел (по умолчанию 1)\n"
         "  --delay MS            пауза между тактами, мс (по умолчанию %d с анимацией,\n"
         "                        0 без неё)\n"
         "  --animate             перерисовывать поле на месте (по умолчанию в терминале)\n"
         "  --no-animate          печатать кадры подряд (по умолчанию при выводе в файл)\n"
         "  --verbose             показывать перемещение каждого снаряда\n"
-        "  --help                эта справка\n",
-        prog, MAX_SHIELDS, DEFAULT_ANIMATION_DELAY_MS);
+        "  --log FILE            журнал игры и итоговая статистика (по умолчанию %s)\n"
+        "  --no-log              не вести журнал\n"
+        "  --help                эта справка\n"
+        "\n"
+        "Сигналы во время игры:\n"
+        "  SIGINT (Ctrl+C), SIGTERM  остановить игру после текущего такта\n"
+        "  SIGUSR1                   вывести отчёт о состоянии\n"
+        "  SIGUSR2                   снять или вернуть предел тактов\n",
+        prog, MAX_SHIELDS, DEFAULT_ANIMATION_DELAY_MS, DEFAULT_LOG_PATH);
 }
 
 // целое в диапазоне [min, max], иначе понятная ошибка
@@ -305,7 +321,7 @@ ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
                 ok = parse_shield(cfg, optarg);
                 break;
             case OPT_TICKS:
-                ok = parse_int(optarg, "ticks", 1, INT_MAX, &cfg->max_ticks);
+                ok = parse_int(optarg, "ticks", 0, INT_MAX, &cfg->max_ticks);
                 break;
             case OPT_SEED:
                 ok = parse_seed(optarg, &cfg->seed);
@@ -321,6 +337,15 @@ ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
                 break;
             case OPT_VERBOSE:
                 cfg->verbose = true;
+                break;
+            case OPT_TIME_LIMIT:
+                ok = parse_int(optarg, "time-limit", 0, 86400, &cfg->time_limit_sec);
+                break;
+            case OPT_LOG:
+                cfg->log_path = optarg;
+                break;
+            case OPT_NO_LOG:
+                cfg->log_path = NULL;
                 break;
             case 'h':
             case OPT_HELP:
@@ -349,23 +374,36 @@ ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
     return config_validate(cfg) ? CONFIG_OK : CONFIG_ERROR;
 }
 
-void config_print(const Config* cfg) {
-    printf("Параметры моделирования:\n");
-    printf("  поле: %dx%d, предел тактов: %d, зерно: %llu\n", cfg->width, cfg->height,
-           cfg->max_ticks, (unsigned long long)cfg->seed);
-    printf("  строй: %d ряд(ов) x %d столбц(ов), скорость %d раз в %d такт(ов), направление %s\n",
-           cfg->alien_rows, cfg->alien_cols, cfg->formation_speed, cfg->formation_period,
-           cfg->formation_dir > 0 ? "вправо" : "влево");
-    printf("  пришельцы: вероятность выстрела %d%%, скорость снаряда %d\n", cfg->alien_fire_rate,
-           cfg->alien_shot_speed);
-    printf("  пушка: стратегия %s, снарядов %d, скорость снаряда %d, жизней %d\n",
-           strategy_name(cfg->strategy), cfg->cannon_ammo, cfg->cannon_shot_speed,
-           cfg->cannon_lives);
-    printf("  режим: %s\n", cfg->extended ? "расширенный" : "базовый");
+void config_print(const Config* cfg, FILE* out) {
+    fprintf(out, "Параметры моделирования:\n");
+    if (cfg->max_ticks > 0) {
+        fprintf(out, "  поле: %dx%d, предел тактов: %d, зерно: %llu\n", cfg->width, cfg->height,
+                cfg->max_ticks, (unsigned long long)cfg->seed);
+    } else {
+        fprintf(out, "  поле: %dx%d, предел тактов: нет, зерно: %llu\n", cfg->width, cfg->height,
+                (unsigned long long)cfg->seed);
+    }
+    fprintf(out,
+            "  строй: %d ряд(ов) x %d столбц(ов), скорость %d раз в %d такт(ов), направление %s\n",
+            cfg->alien_rows, cfg->alien_cols, cfg->formation_speed, cfg->formation_period,
+            cfg->formation_dir > 0 ? "вправо" : "влево");
+    fprintf(out, "  пришельцы: вероятность выстрела %d%%, скорость снаряда %d\n",
+            cfg->alien_fire_rate, cfg->alien_shot_speed);
+    fprintf(out, "  пушка: стратегия %s, снарядов %d, скорость снаряда %d, жизней %d\n",
+            strategy_name(cfg->strategy), cfg->cannon_ammo, cfg->cannon_shot_speed,
+            cfg->cannon_lives);
+    fprintf(out, "  режим: %s\n", cfg->extended ? "расширенный" : "базовый");
     for (int i = 0; i < cfg->shield_count; i++) {
         const ShieldSpec* spec = &cfg->shields[i];
-        printf("  укрытие: строка %d, столбцы %d..%d, прочность %d\n", spec->y, spec->x,
-               spec->x + spec->width - 1, spec->hp);
+        fprintf(out, "  укрытие: строка %d, столбцы %d..%d, прочность %d\n", spec->y, spec->x,
+                spec->x + spec->width - 1, spec->hp);
     }
-    printf("\n");
+    // строй, пушка и каждый пришелец работают в своих потоках
+    fprintf(out, "  потоков-участников: %d (строй, пушка, пришельцев: %d)\n",
+            2 + cfg->alien_rows * cfg->alien_cols, cfg->alien_rows * cfg->alien_cols);
+    if (cfg->time_limit_sec > 0) {
+        fprintf(out, "  ограничение времени: %d с\n", cfg->time_limit_sec);
+    }
+    fprintf(out, "  журнал: %s\n", cfg->log_path != NULL ? cfg->log_path : "не ведётся");
+    fprintf(out, "\n");
 }

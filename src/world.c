@@ -2,6 +2,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include "../include/sync.h"
 
 // имя, символ, прочность, очки, множитель стрельбы
 const AlienTypeInfo ALIEN_TYPES[ALIEN_TYPE_COUNT] = {
@@ -105,9 +108,24 @@ void world_init(World* world, const Config* cfg) {
     world->step_stamp = 0;
 
     events_init(&world->events);
+
+    // потоки создаёт actors_start
+    world->actors = NULL;
+    world->actor_count = 0;
+    world->actors_running = 0;
+    world->phase_done = NULL;
+    world->tick_limit_enabled = cfg->max_ticks > 0;
+
+    memset(&world->stats, 0, sizeof(world->stats));
+    mutex_init(&world->stats_lock);
+
+    world->journal = NULL;
+    clock_gettime(CLOCK_MONOTONIC, &world->started_at);
+    world->elapsed_sec = 0;
 }
 
 void world_destroy(World* world) {
+    mutex_destroy(&world->stats_lock);
     events_free(&world->events);
     free(world->shots);
     free(world->shields);
@@ -201,6 +219,14 @@ void world_check_invariants(const World* world) {
         INVARIANT(alien->hp > 0);
     }
     INVARIANT(alive == world->aliens_alive);
+
+    // поток работает ровно у живых пришельцев: уничтоженный больше не ходит и не стреляет
+    if (world->actors != NULL) {
+        for (int i = 0; i < world->alien_count; i++) {
+            INVARIANT(world->actors[ACTOR_ALIENS_BASE + i].running == world->aliens[i].alive);
+        }
+        INVARIANT(world->actors_running == ACTOR_ALIENS_BASE + world->aliens_alive);
+    }
 
     const Cannon* cannon = &world->cannon;
     INVARIANT(world_in_bounds(world, cannon->x, cannon->y));

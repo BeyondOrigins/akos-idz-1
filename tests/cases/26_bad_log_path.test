@@ -1,0 +1,4 @@
+# Ошибка: журнал нельзя создать
+args: --log /nonexistent-dir/game.log
+exit: 1
+expect: Ошибка: не удалось открыть журнал "/nonexistent-dir/game.log"

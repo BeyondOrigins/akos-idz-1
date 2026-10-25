@@ -1,5 +1,7 @@
 .cache/
 build/
+build-*/
 .vscode/
 .idea/
 .DS_Store
+*.log

@@ -1,5 +1,8 @@
 #include "../include/formation.h"
 
+#include <stdlib.h>
+
+#include "../include/sync.h"
 #include "../include/world.h"
 
 void formation_plan(World* world) {
@@ -40,13 +43,33 @@ void formation_plan(World* world) {
     }
 }
 
-// пришельцы уже сдвинулись сами, здесь только счётчик и направление
+// пришельцы сдвигаются в своих потоках, здесь только счётчик и направление
 void formation_move(World* world) {
     Formation* formation = &world->formation;
     if (formation->ticks_until_move > 1) {
         formation->ticks_until_move--;
-    } else {
-        formation->ticks_until_move = world->cfg.formation_period;
-        formation->dir = formation->next_dir;
+        return;
     }
+    formation->ticks_until_move = world->cfg.formation_period;
+    formation->dir = formation->next_dir;
+
+    if (formation->dy == 0 && formation->dx == 0) {
+        return;
+    }
+    if (formation->dy != 0) {
+        events_add_from(&world->events, EVENT_SOURCE_FORMATION, false, EVENT_NO_CELL,
+                        EVENT_NO_CELL, "Строй достиг границы: опустился на строку и развернулся %s",
+                        formation->dir > 0 ? "вправо" : "влево");
+    } else {
+        events_add_from(&world->events, EVENT_SOURCE_FORMATION, false, EVENT_NO_CELL,
+                        EVENT_NO_CELL, "Строй сместился на %d %s", abs(formation->dx),
+                        formation->dx > 0 ? "вправо" : "влево");
+    }
+    mutex_lock(&world->stats_lock);
+    if (formation->dy != 0) {
+        world->stats.formation_descents++;
+    } else {
+        world->stats.formation_steps++;
+    }
+    mutex_unlock(&world->stats_lock);
 }
