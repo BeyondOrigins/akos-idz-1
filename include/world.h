@@ -1,10 +1,8 @@
 #ifndef WORLD_H
 #define WORLD_H
 
-#include <pthread.h>
-#include <semaphore.h>
 #include <stdbool.h>
-#include <stdio.h>
+#include <sys/types.h>
 #include <time.h>
 
 #include "config.h"
@@ -18,6 +16,10 @@
             world_invariant_failed(#cond, __FILE__, __LINE__);                       \
         }                                                                            \
     } while (0)
+
+// снарядов в полёте одновременно: стреляет только нижний пришелец в столбце
+// (не больше 50 за такт), снаряд живёт не дольше высоты поля (50 тактов)
+#define MAX_SHOTS 4096
 
 typedef enum {
     ALIEN_GRUNT,       // рядовой
@@ -102,16 +104,16 @@ typedef enum {
     OUTCOME_CANNON_DESTROYED,  // проигрыш - пушка уничтожена
     OUTCOME_INVASION,          // проигрыш - пришелец добрался до нижней границы
     OUTCOME_TIMEOUT,           // исчерпано число тактов
-    OUTCOME_TIME_LIMIT,        // истекло время моделирования (SIGALRM)
     OUTCOME_INTERRUPTED,       // программа прервана через Ctrl + C (SIGINT)
-    OUTCOME_TERMINATED,        // программа остановлена сигналом SIGTERM
+    OUTCOME_TERMINATED,        // программа остановлена сигналом SIGTERM или SIGHUP
+    OUTCOME_ACTOR_LOST,        // процесс-участник аварийно завершился
 } Outcome;
 
-// что координатор поручает потоку-участнику
+// что координатор поручает процессу-участнику
 typedef enum {
     COMMAND_PLAN,  // фаза формирования действий
     COMMAND_MOVE,  // фаза перемещения участников
-    COMMAND_STOP,  // завершить поток
+    COMMAND_STOP,  // завершить процесс
 } Command;
 
 typedef enum {
@@ -120,28 +122,25 @@ typedef enum {
     ACTOR_ALIEN,
 } ActorKind;
 
-// места участников в массиве потоков: строй, пушка, затем пришельцы
+// места участников в таблице процессов: строй, пушка, затем пришельцы
 #define ACTOR_FORMATION_INDEX 0
 #define ACTOR_CANNON_INDEX 1
 #define ACTOR_ALIENS_BASE 2
 
-struct World;
-
-// поток-участник модели
+// процесс-участник модели
 typedef struct {
     ActorKind kind;
-    int alien_index;       // для пришельца: индекс в массиве aliens
-    struct World* world;
-    pthread_t thread;
-    sem_t* go;             // координатор разрешает выполнить command
-    Command command;
-    bool running;          // поток создан и ещё не завершён
-    int phases;            // сколько фаз отработал
-    int stop_tick;         // на каком такте завершён
-} Actor;
+    int alien_index;  // для пришельца: индекс в массиве aliens
+    Command command;  // последняя команда координатора
+    bool joined;      // процесс подключился к игре
+    bool running;     // процесс работает и получает команды
+    pid_t pid;
+    int phases;       // сколько команд выполнил
+    int stop_tick;    // на каком такте завершён
+} ActorSlot;
 
-// статистика игры; её пополняют несколько потоков, поэтому
-// изменения делаются только под мьютексом stats_lock
+// статистика игры; её пополняют несколько процессов, поэтому изменения
+// делаются только под семафором g_sems.stats_lock
 typedef struct {
     int formation_steps;       // сдвигов строя вбок
     int formation_descents;    // спусков строя
@@ -157,7 +156,9 @@ typedef struct {
     int kills[ALIEN_TYPE_COUNT];
 } Stats;
 
-typedef struct World {
+// Состояние модели. В программах с разделяемой памятью структура целиком
+// лежит в ней, поэтому внутри нет указателей — только массивы
+typedef struct {
     Config cfg;
     int width;
     int height;
@@ -167,44 +168,37 @@ typedef struct World {
     Outcome outcome;
 
     Formation formation;
-    Alien* aliens;
+    Alien aliens[MAX_ALIENS];
     int alien_count;
     int aliens_alive;
     Cannon cannon;
 
-    int* shields;              // прочность укрытия в каждой клетке, 0 = пусто
+    unsigned char shields[MAX_CELLS];  // прочность укрытия в каждой клетке, 0 = пусто
 
-    Projectile* shots;
+    Projectile shots[MAX_SHOTS];
     int shot_count;
-    int shot_capacity;
     int next_shot_id;
     unsigned long step_stamp;  // номер текущего шага снарядов
 
     EventLog events;
 
-    // потоки-участники и синхронизация фаз такта
-    Actor* actors;
+    // процессы-участники
+    ActorSlot actors[MAX_ACTORS];
     int actor_count;
     int actors_running;
-    sem_t* phase_done;  // участник сообщает, что фаза выполнена
-    bool tick_limit_enabled;  // предел тактов действует (SIGUSR2 переключает)
+    pid_t coordinator_pid;
 
     Stats stats;
-    pthread_mutex_t stats_lock;
 
-    FILE* journal;  // файл журнала или NULL
     struct timespec started_at;
     double elapsed_sec;
 } World;
 
-void* checked_calloc(size_t count, size_t size);
-
 void world_init(World* world, const Config* cfg);
-void world_destroy(World* world);
 
 bool world_in_bounds(const World* world, int x, int y);
 Alien* world_alien_at(World* world, int x, int y);
-int* world_shield_at(World* world, int x, int y);
+unsigned char* world_shield_at(World* world, int x, int y);
 bool world_column_has_shield(const World* world, int x);
 
 Projectile* world_add_shot(World* world, OwnerKind owner, int owner_id, int x, int y, int dir,
@@ -213,5 +207,14 @@ void world_remove_inactive_shots(World* world);
 
 void world_check_invariants(const World* world);
 void world_invariant_failed(const char* cond, const char* file, int line);
+
+void stats_add(Stats* total, const Stats* delta);
+
+// участники
+const char* actor_kind_name(ActorKind kind);
+// имя для вывода: "строй", "пушка", "пришелец #5 (стрелок)"
+void actor_name(const World* world, int index, char* buf, size_t size);
+// выполнить команду PLAN или MOVE за участника index (вызывается в его процессе)
+void actor_do(World* world, int index, Command command);
 
 #endif

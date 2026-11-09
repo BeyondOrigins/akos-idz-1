@@ -20,7 +20,7 @@ void alien_plan(const World* world, Alien* alien) {
 }
 
 // сам пришелец не ходит, его двигает строй: смещение, выбранное
-// потоком строя в фазе планирования, здесь только читается
+// процессом строя в фазе планирования, здесь только читается
 void alien_move(World* world, Alien* alien) {
     alien->x += world->formation.dx;
     alien->y += world->formation.dy;
@@ -30,9 +30,9 @@ void alien_move(World* world, Alien* alien) {
     alien->fired = alien->wants_fire && world_in_bounds(world, alien->x, alien->y + 1);
     if (alien->fired) {
         alien->shots_fired++;
-        // счётчик общий для всех потоков пришельцев
-        mutex_lock(&world->stats_lock);
+        // счётчик общий для всех процессов пришельцев
+        sem_lock(g_sems.stats_lock);
         world->stats.alien_shots++;
-        mutex_unlock(&world->stats_lock);
+        sem_unlock(g_sems.stats_lock);
     }
 }

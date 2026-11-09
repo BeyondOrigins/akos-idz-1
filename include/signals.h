@@ -2,32 +2,23 @@
 #define SIGNALS_H
 
 #include <stdbool.h>
+#include <sys/types.h>
 
-// почему пришлось остановить игру
-typedef enum {
-    STOP_NONE,
-    STOP_INTERRUPT,   // SIGINT (Ctrl+C)
-    STOP_TERMINATE,   // SIGTERM
-    STOP_TIME_LIMIT,  // SIGALRM: истекло время --time-limit
-} StopReason;
+// Координатор: SIGINT (Ctrl+C), SIGTERM и SIGHUP только запоминаются, игра
+// доигрывает текущий такт, завершает участников и удаляет семафоры и память.
+// Обработчик ставится без SA_RESTART, чтобы сигнал прерывал ожидание семафора.
+void signals_setup_coordinator(void);
+// номер полученного сигнала остановки или 0
+int signals_stop_signal(void);
 
-#define SIGNAL_NOTE_SIZE 160
-#define MAX_SIGNAL_NOTES 16
+// дочерний процесс (fork): Ctrl+C приходит всей группе процессов, но решает
+// координатор, поэтому SIGINT и SIGHUP игнорируются
+void signals_setup_fork_child(void);
 
-// Сигналы обрабатывает отдельный поток через sigwait. Во всех остальных потоках
-// они заблокированы, поэтому signals_start нужно вызвать до создания других потоков.
-// has_tick_limit: задан ли предел тактов (SIGUSR2 снимает и возвращает его)
-bool signals_start(bool has_tick_limit);
-// завершает поток сигналов
-void signals_shutdown(void);
-
-StopReason signals_stop_reason(void);
-bool signals_tick_limit_enabled(void);
-// был ли запрошен отчёт (SIGUSR1); флаг при этом сбрасывается
-bool signals_take_report_request(void);
-// забирает накопленные сообщения о полученных сигналах; возвращает их число
-int signals_take_notes(char notes[][SIGNAL_NOTE_SIZE], int max);
-// сколько сигналов обработано
-int signals_received(void);
+// независимо запущенный участник: пока координатор не известен, сигнал
+// остановки просто запоминается; потом пересылается координатору
+void signals_setup_participant(void);
+void signals_forward_to(pid_t coordinator);
+bool signals_participant_stop(void);
 
 #endif

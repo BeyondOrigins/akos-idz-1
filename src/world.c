@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../include/sync.h"
+#include <unistd.h>
 
 // имя, символ, прочность, очки, множитель стрельбы
 const AlienTypeInfo ALIEN_TYPES[ALIEN_TYPE_COUNT] = {
@@ -12,15 +12,6 @@ const AlienTypeInfo ALIEN_TYPES[ALIEN_TYPE_COUNT] = {
     [ALIEN_SHOOTER] = {"стрелок", 'M', 1, 20, 2},
     [ALIEN_TANK] = {"броненосец", 'H', 3, 30, 1},
 };
-
-void* checked_calloc(size_t count, size_t size) {
-    void* ptr = calloc(count, size);
-    if (ptr == NULL) {
-        perror("calloc");
-        exit(EXIT_FAILURE);
-    }
-    return ptr;
-}
 
 // расширенный режим: сверху броненосцы, под ними стрелки, внизу рядовые
 AlienType alien_type_for_row(const Config* cfg, int row) {
@@ -40,7 +31,6 @@ void init_aliens(World* world) {
     const Config* cfg = &world->cfg;
     world->alien_count = cfg->alien_rows * cfg->alien_cols;
     world->aliens_alive = world->alien_count;
-    world->aliens = checked_calloc((size_t)world->alien_count, sizeof(Alien));
 
     // ставим строй по центру
     int formation_width = (cfg->alien_cols - 1) * ALIEN_SPACING_X + 1;
@@ -63,15 +53,40 @@ void init_aliens(World* world) {
 
 void init_shields(World* world) {
     const Config* cfg = &world->cfg;
-    world->shields = checked_calloc((size_t)(world->width * world->height), sizeof(int));
+    memset(world->shields, 0, sizeof(world->shields));
     for (int i = 0; i < cfg->shield_count; i++) {
         const ShieldSpec* spec = &cfg->shields[i];
         for (int dx = 0; dx < spec->width; dx++) {
-            *world_shield_at(world, spec->x + dx, spec->y) = spec->hp;
+            *world_shield_at(world, spec->x + dx, spec->y) = (unsigned char)spec->hp;
         }
     }
 }
 
+void init_actors(World* world) {
+    world->actor_count = ACTOR_ALIENS_BASE + world->alien_count;
+    world->actors_running = 0;
+    for (int i = 0; i < world->actor_count; i++) {
+        ActorSlot* slot = &world->actors[i];
+        if (i == ACTOR_FORMATION_INDEX) {
+            slot->kind = ACTOR_FORMATION;
+            slot->alien_index = -1;
+        } else if (i == ACTOR_CANNON_INDEX) {
+            slot->kind = ACTOR_CANNON;
+            slot->alien_index = -1;
+        } else {
+            slot->kind = ACTOR_ALIEN;
+            slot->alien_index = i - ACTOR_ALIENS_BASE;
+        }
+        slot->command = COMMAND_PLAN;
+        slot->joined = false;
+        slot->running = false;
+        slot->pid = 0;
+        slot->phases = 0;
+        slot->stop_tick = -1;
+    }
+}
+
+// мир может лежать в разделяемой памяти, поэтому заполняется на месте
 void world_init(World* world, const Config* cfg) {
     world->cfg = *cfg;
     world->width = cfg->width;
@@ -101,35 +116,19 @@ void world_init(World* world, const Config* cfg) {
 
     init_shields(world);
 
-    world->shots = NULL;
     world->shot_count = 0;
-    world->shot_capacity = 0;
     world->next_shot_id = 1;
     world->step_stamp = 0;
 
-    events_init(&world->events);
+    world->events.count = 0;
+    world->events.dropped = 0;
 
-    // потоки создаёт actors_start
-    world->actors = NULL;
-    world->actor_count = 0;
-    world->actors_running = 0;
-    world->phase_done = NULL;
-    world->tick_limit_enabled = cfg->max_ticks > 0;
+    init_actors(world);
+    world->coordinator_pid = 0;
 
     memset(&world->stats, 0, sizeof(world->stats));
-    mutex_init(&world->stats_lock);
-
-    world->journal = NULL;
     clock_gettime(CLOCK_MONOTONIC, &world->started_at);
     world->elapsed_sec = 0;
-}
-
-void world_destroy(World* world) {
-    mutex_destroy(&world->stats_lock);
-    events_free(&world->events);
-    free(world->shots);
-    free(world->shields);
-    free(world->aliens);
 }
 
 bool world_in_bounds(const World* world, int x, int y) {
@@ -146,7 +145,7 @@ Alien* world_alien_at(World* world, int x, int y) {
     return NULL;
 }
 
-int* world_shield_at(World* world, int x, int y) {
+unsigned char* world_shield_at(World* world, int x, int y) {
     return &world->shields[y * world->width + x];
 }
 
@@ -161,16 +160,8 @@ bool world_column_has_shield(const World* world, int x) {
 
 Projectile* world_add_shot(World* world, OwnerKind owner, int owner_id, int x, int y, int dir,
                            int speed) {
-    if (world->shot_count == world->shot_capacity) {
-        int capacity = world->shot_capacity == 0 ? 32 : world->shot_capacity * 2;
-        Projectile* shots = realloc(world->shots, (size_t)capacity * sizeof(Projectile));
-        if (shots == NULL) {
-            perror("realloc");
-            exit(EXIT_FAILURE);
-        }
-        world->shots = shots;
-        world->shot_capacity = capacity;
-    }
+    // оценка MAX_SHOTS в world.h гарантирует, что место есть
+    INVARIANT(world->shot_count < MAX_SHOTS);
 
     Projectile* shot = &world->shots[world->shot_count++];
     shot->id = world->next_shot_id++;
@@ -202,8 +193,9 @@ void world_remove_inactive_shots(World* world) {
 }
 
 void world_invariant_failed(const char* cond, const char* file, int line) {
-    fprintf(stderr, "Нарушен инвариант модели: %s (%s:%d)\n", cond, file, line);
-    abort();
+    fprintf(stderr, "Нарушен инвариант модели: %s (%s:%d), процесс %d\n", cond, file, line,
+            (int)getpid());
+    exit(EXIT_FAILURE);
 }
 
 // проверка в конце такта: никто не вышел за поле, счётчики сходятся
@@ -220,13 +212,11 @@ void world_check_invariants(const World* world) {
     }
     INVARIANT(alive == world->aliens_alive);
 
-    // поток работает ровно у живых пришельцев: уничтоженный больше не ходит и не стреляет
-    if (world->actors != NULL) {
-        for (int i = 0; i < world->alien_count; i++) {
-            INVARIANT(world->actors[ACTOR_ALIENS_BASE + i].running == world->aliens[i].alive);
-        }
-        INVARIANT(world->actors_running == ACTOR_ALIENS_BASE + world->aliens_alive);
+    // процесс работает ровно у живых пришельцев: уничтоженный больше не ходит и не стреляет
+    for (int i = 0; i < world->alien_count; i++) {
+        INVARIANT(world->actors[ACTOR_ALIENS_BASE + i].running == world->aliens[i].alive);
     }
+    INVARIANT(world->actors_running == ACTOR_ALIENS_BASE + world->aliens_alive);
 
     const Cannon* cannon = &world->cannon;
     INVARIANT(world_in_bounds(world, cannon->x, cannon->y));
@@ -243,5 +233,22 @@ void world_check_invariants(const World* world) {
             INVARIANT(shot->owner_id >= 1 && shot->owner_id <= world->alien_count);
             INVARIANT(shot->dir == 1);
         }
+    }
+}
+
+void stats_add(Stats* total, const Stats* delta) {
+    total->formation_steps += delta->formation_steps;
+    total->formation_descents += delta->formation_descents;
+    total->cannon_moves += delta->cannon_moves;
+    total->cannon_shots += delta->cannon_shots;
+    total->cannon_hits += delta->cannon_hits;
+    total->alien_shots += delta->alien_shots;
+    total->cannon_damage += delta->cannon_damage;
+    total->shield_hits += delta->shield_hits;
+    total->shield_cells_destroyed += delta->shield_cells_destroyed;
+    total->shot_collisions += delta->shot_collisions;
+    total->shots_left_field += delta->shots_left_field;
+    for (int i = 0; i < ALIEN_TYPE_COUNT; i++) {
+        total->kills[i] += delta->kills[i];
     }
 }

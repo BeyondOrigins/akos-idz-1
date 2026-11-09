@@ -1,6 +1,5 @@
 #include "../include/render.h"
 
-#include "../include/signals.h"
 #include "../include/world.h"
 
 #include <stdio.h>
@@ -92,11 +91,16 @@ int print_events(const World* world, int limit) {
             printed++;
         }
     }
+    int lines = shown;
     if (shown < visible) {
         printf("  ... и ещё событий: %d\n", visible - shown);
-        return shown + 1;
+        lines++;
     }
-    return shown;
+    if (world->events.dropped > 0) {
+        printf("  ... не поместилось в журнал такта событий: %d\n", world->events.dropped);
+        lines++;
+    }
+    return lines;
 }
 
 // сколько событий влезет под полем, чтобы экран не прокручивался
@@ -121,7 +125,7 @@ void render_header(const World* world, FILE* out) {
 void render_status(const World* world, FILE* out) {
     fprintf(out,
             "Счёт: %d | Жизни: %d | Снаряды: %d | Пришельцев: %d | Снарядов в полёте: %d | "
-            "Потоков: %d\n",
+            "Процессов: %d\n",
             world->score, world->cannon.lives, world->cannon.ammo, world->aliens_alive,
             world->shot_count, world->actors_running);
 }
@@ -165,12 +169,12 @@ const char* outcome_text(Outcome outcome) {
             return "поражение — пришельцы достигли нижней границы";
         case OUTCOME_TIMEOUT:
             return "исчерпано предельное число тактов";
-        case OUTCOME_TIME_LIMIT:
-            return "истекло время моделирования (SIGALRM)";
         case OUTCOME_INTERRUPTED:
             return "игра прервана (SIGINT)";
         case OUTCOME_TERMINATED:
-            return "игра остановлена (SIGTERM)";
+            return "игра остановлена сигналом (SIGTERM или SIGHUP)";
+        case OUTCOME_ACTOR_LOST:
+            return "игра остановлена — процесс-участник аварийно завершился";
         case OUTCOME_RUNNING:
             break;
     }
@@ -209,7 +213,43 @@ void render_summary(const World* world, FILE* out) {
             stats->shield_cells_destroyed);
     fprintf(out, "  снаряды: столкновений встречных %d, покинули поле %d\n",
             stats->shot_collisions, stats->shots_left_field);
-    fprintf(out, "  потоков-участников создано: %d, обработано сигналов: %d\n",
-            world->actor_count, signals_received());
-    fprintf(out, "  время работы: %.2f с\n", world->elapsed_sec);
+    fprintf(out, "  процессов-участников: %d, время работы: %.2f с\n", world->actor_count,
+            world->elapsed_sec);
+}
+
+// число символов UTF-8 (а не байтов) для выравнивания столбцов
+int utf8_length(const char* text) {
+    int length = 0;
+    for (const unsigned char* p = (const unsigned char*)text; *p != '\0'; p++) {
+        if ((*p & 0xC0) != 0x80) {
+            length++;
+        }
+    }
+    return length;
+}
+
+void render_processes(const World* world, FILE* out) {
+    fprintf(out, "Процессы-участники:\n");
+    fprintf(out, "  участник");
+    for (int pad = utf8_length("участник"); pad < 28; pad++) {
+        fputc(' ', out);
+    }
+    // printf выравнивает по байтам, а кириллица занимает по 2 байта на букву
+    fprintf(out, " %7s   команд  завершён\n", "pid");
+    for (int i = 0; i < world->actor_count; i++) {
+        const ActorSlot* slot = &world->actors[i];
+        char name[64];
+        actor_name(world, i, name, sizeof(name));
+        bool killed = slot->kind == ACTOR_ALIEN && !world->aliens[slot->alien_index].alive;
+        fprintf(out, "  %s", name);
+        for (int pad = utf8_length(name); pad < 28; pad++) {
+            fputc(' ', out);
+        }
+        if (slot->pid == 0) {
+            fprintf(out, " %7s %8s  не подключился\n", "-", "-");
+        } else {
+            fprintf(out, " %7d %8d  такт %d, %s\n", (int)slot->pid, slot->phases,
+                    slot->stop_tick, killed ? "пришелец уничтожен" : "конец игры");
+        }
+    }
 }

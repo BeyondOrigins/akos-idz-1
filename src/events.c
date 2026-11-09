@@ -6,52 +6,36 @@
 
 #include "../include/sync.h"
 
-void events_init(EventLog* log) {
-    log->items = NULL;
-    log->count = 0;
-    log->capacity = 0;
-    mutex_init(&log->lock);
-}
-
-void events_free(EventLog* log) {
-    free(log->items);
-    log->items = NULL;
-    log->count = 0;
-    log->capacity = 0;
-    mutex_destroy(&log->lock);
-}
-
 void events_clear(EventLog* log) {
-    mutex_lock(&log->lock);
+    sem_lock(g_sems.events_lock);
     log->count = 0;
-    mutex_unlock(&log->lock);
+    log->dropped = 0;
+    sem_unlock(g_sems.events_lock);
+}
+
+void events_append(EventLog* log, const Event* event) {
+    sem_lock(g_sems.events_lock);
+    if (log->count < MAX_EVENTS) {
+        log->items[log->count] = *event;
+        log->items[log->count].seq = log->count;
+        log->count++;
+    } else {
+        log->dropped++;
+    }
+    sem_unlock(g_sems.events_lock);
 }
 
 void events_vadd(EventLog* log, int source, bool verbose, int x, int y, const char* fmt,
                  va_list args) {
-    // текст готовим до захвата мьютекса, чтобы держать его поменьше
+    // текст готовим до захвата семафора, чтобы держать его поменьше
     Event event;
     event.verbose = verbose;
     event.x = x;
     event.y = y;
     event.source = source;
+    event.seq = 0;
     vsnprintf(event.text, sizeof(event.text), fmt, args);
-
-    mutex_lock(&log->lock);
-    // место кончилось, удваиваем
-    if (log->count == log->capacity) {
-        int capacity = log->capacity == 0 ? 32 : log->capacity * 2;
-        Event* items = realloc(log->items, (size_t)capacity * sizeof(Event));
-        if (items == NULL) {
-            perror("realloc");
-            exit(EXIT_FAILURE);
-        }
-        log->items = items;
-        log->capacity = capacity;
-    }
-    event.seq = log->count;
-    log->items[log->count++] = event;
-    mutex_unlock(&log->lock);
+    events_append(log, &event);
 }
 
 void events_add(EventLog* log, bool verbose, int x, int y, const char* fmt, ...) {
@@ -79,7 +63,7 @@ int compare_events(const void* a, const void* b) {
 }
 
 void events_sort(EventLog* log) {
-    mutex_lock(&log->lock);
+    sem_lock(g_sems.events_lock);
     qsort(log->items, (size_t)log->count, sizeof(Event), compare_events);
-    mutex_unlock(&log->lock);
+    sem_unlock(g_sems.events_lock);
 }

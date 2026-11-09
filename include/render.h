@@ -7,10 +7,9 @@
 
 // поле после такта
 void render_tick(const World* world);
-// заголовок такта и строка состояния
-void render_header(const World* world, FILE* out);
-void render_status(const World* world, FILE* out);
 // итог игры и статистика
 void render_summary(const World* world, FILE* out);
+// таблица процессов-участников
+void render_processes(const World* world, FILE* out);
 
 #endif

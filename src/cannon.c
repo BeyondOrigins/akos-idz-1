@@ -169,17 +169,17 @@ void cannon_move(World* world, Cannon* cannon) {
         cannon->fired = true;
     }
 
-    // журнал и статистика общие с другими потоками, они защищены мьютексами
+    // журнал и статистика общие с другими процессами, они защищены семафорами
     if (cannon->dx != 0) {
         events_add_from(&world->events, EVENT_SOURCE_CANNON, false, EVENT_NO_CELL, EVENT_NO_CELL,
                         "Пушка переместилась в столбец %d", cannon->x);
     }
-    mutex_lock(&world->stats_lock);
+    sem_lock(g_sems.stats_lock);
     if (cannon->dx != 0) {
         world->stats.cannon_moves++;
     }
     if (cannon->fired) {
         world->stats.cannon_shots++;
     }
-    mutex_unlock(&world->stats_lock);
+    sem_unlock(g_sems.stats_lock);
 }
