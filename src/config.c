@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 // коды длинных опций; с 256, чтобы не пересечься с символами
 enum {
@@ -28,9 +27,6 @@ enum {
     OPT_TICKS,
     OPT_SEED,
     OPT_DELAY,
-    OPT_ANIMATE,
-    OPT_NO_ANIMATE,
-    OPT_VERBOSE,
     OPT_HELP,
 };
 
@@ -53,9 +49,6 @@ const struct option LONG_OPTIONS[] = {
     {"ticks", required_argument, NULL, OPT_TICKS},
     {"seed", required_argument, NULL, OPT_SEED},
     {"delay", required_argument, NULL, OPT_DELAY},
-    {"animate", no_argument, NULL, OPT_ANIMATE},
-    {"no-animate", no_argument, NULL, OPT_NO_ANIMATE},
-    {"verbose", no_argument, NULL, OPT_VERBOSE},
     {"help", no_argument, NULL, OPT_HELP},
     {NULL, 0, NULL, 0},
 };
@@ -89,20 +82,21 @@ void config_set_defaults(Config* cfg) {
     cfg->max_ticks = 300;
     cfg->seed = 1;
     // в терминале анимируем, в файл пишем кадры подряд
-    cfg->animate = isatty(STDOUT_FILENO) != 0;
-    cfg->delay_ms = DELAY_AUTO;
+    cfg->delay_ms = DEFAULT_DELAY_MS;
 }
 
 void config_print_usage(const char* prog) {
     printf(
-        "Использование: %s [параметры]\n"
+        "Использование: %s <IP> <порт> [параметры]\n"
+        "  IP и порт, на которых сервер ждёт клиентов (0.0.0.0 — все интерфейсы)\n"
+        "\n"
         "\n"
         "Поле и строй:\n"
         "  --width N             ширина поля (8..100, по умолчанию 30)\n"
         "  --height N            высота поля (8..50, по умолчанию 16)\n"
         "  --rows N              число рядов пришельцев (по умолчанию 3)\n"
         "  --cols N              число столбцов пришельцев (по умолчанию 8);\n"
-        "                        всего пришельцев (процессов) не более %d\n"
+        "                        всего пришельцев (клиентов) не более %d\n"
         "  --formation-speed N   клеток за один ход строя (по умолчанию 1)\n"
         "  --formation-period N  строй ходит раз в N тактов (по умолчанию 2)\n"
         "  --direction left|right  начальное направление строя (right)\n"
@@ -127,16 +121,12 @@ void config_print_usage(const char* prog) {
         "  --ticks N             предельное число тактов (по умолчанию 300);\n"
         "                        0 — без предела, до исхода игры или прерывания\n"
         "  --seed N              зерно генератора случайных чисел (по умолчанию 1)\n"
-        "  --delay MS            пауза между тактами, мс (по умолчанию %d с анимацией,\n"
-        "                        0 без неё)\n"
-        "  --animate             перерисовывать поле на месте (по умолчанию в терминале)\n"
-        "  --no-animate          печатать кадры подряд (по умолчанию при выводе в файл)\n"
-        "  --verbose             показывать перемещение каждого снаряда\n"
+        "  --delay MS            пауза между тактами, мс (по умолчанию %d)\n"
         "  --help                эта справка\n"
         "\n"
-        "Ctrl+C (SIGINT), SIGTERM, SIGHUP: остановить игру после текущего такта,\n"
-        "завершить процессы-участники и удалить семафоры и разделяемые ресурсы.\n",
-        prog, MAX_ALIENS, MAX_SHIELDS, DEFAULT_ANIMATION_DELAY_MS);
+        "Ctrl+C (SIGINT), SIGTERM, SIGHUP: остановить игру после текущего такта\n"
+        "и завершить всех подключённых клиентов.\n",
+        prog, MAX_ALIENS, MAX_SHIELDS, DEFAULT_DELAY_MS);
 }
 
 // целое в диапазоне [min, max], иначе понятная ошибка
@@ -222,7 +212,7 @@ void add_default_shields(Config* cfg) {
 // проверяем, что всё помещается в поле
 bool config_validate(const Config* cfg) {
     if (cfg->alien_rows * cfg->alien_cols > MAX_ALIENS) {
-        fprintf(stderr, "Ошибка: пришельцев %d x %d = %d, допустимо не более %d (каждый — процесс)\n",
+        fprintf(stderr, "Ошибка: пришельцев %d x %d = %d, допустимо не более %d (каждый — отдельный клиент)\n",
                 cfg->alien_rows, cfg->alien_cols, cfg->alien_rows * cfg->alien_cols, MAX_ALIENS);
         return false;
     }
@@ -323,15 +313,6 @@ ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
             case OPT_DELAY:
                 ok = parse_int(optarg, "delay", 0, 60000, &cfg->delay_ms);
                 break;
-            case OPT_ANIMATE:
-                cfg->animate = true;
-                break;
-            case OPT_NO_ANIMATE:
-                cfg->animate = false;
-                break;
-            case OPT_VERBOSE:
-                cfg->verbose = true;
-                break;
             case 'h':
             case OPT_HELP:
                 return CONFIG_HELP;
@@ -352,9 +333,6 @@ ConfigStatus config_parse(Config* cfg, int argc, char** argv) {
 
     if (cfg->extended && cfg->shield_count == 0) {
         add_default_shields(cfg);
-    }
-    if (cfg->delay_ms == DELAY_AUTO) {
-        cfg->delay_ms = cfg->animate ? DEFAULT_ANIMATION_DELAY_MS : 0;
     }
     return config_validate(cfg) ? CONFIG_OK : CONFIG_ERROR;
 }
@@ -383,7 +361,7 @@ void config_print(const Config* cfg, FILE* out) {
         fprintf(out, "  укрытие: строка %d, столбцы %d..%d, прочность %d\n", spec->y, spec->x,
                 spec->x + spec->width - 1, spec->hp);
     }
-    // строй, пушка и каждый пришелец работают в своих процессах
-    fprintf(out, "  процессов-участников: %d (строй, пушка, пришельцев: %d)\n",
-            2 + cfg->alien_rows * cfg->alien_cols, cfg->alien_rows * cfg->alien_cols);
+    fprintf(out, "  клиентов-участников: %d (строй, пушка, пришельцев: %d), пауза между тактами %d мс\n",
+            2 + cfg->alien_rows * cfg->alien_cols, cfg->alien_rows * cfg->alien_cols,
+            cfg->delay_ms);
 }

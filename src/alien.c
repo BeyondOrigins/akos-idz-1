@@ -1,7 +1,5 @@
 #include "../include/alien.h"
 
-#include "../include/sync.h"
-
 // стреляет только нижний в столбце, иначе попал бы по своим
 bool alien_is_front(const World* world, const Alien* self) {
     for (int i = 0; i < world->alien_count; i++) {
@@ -30,9 +28,6 @@ void alien_move(World* world, Alien* alien) {
     alien->fired = alien->wants_fire && world_in_bounds(world, alien->x, alien->y + 1);
     if (alien->fired) {
         alien->shots_fired++;
-        // счётчик общий для всех процессов пришельцев
-        sem_lock(g_sems.stats_lock);
         world->stats.alien_shots++;
-        sem_unlock(g_sems.stats_lock);
     }
 }

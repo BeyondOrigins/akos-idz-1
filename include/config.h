@@ -7,11 +7,10 @@
 
 #define MAX_SHIELDS 16
 
-// мир лежит в разделяемой памяти одним куском, поэтому размеры ограничены сверху
 #define MAX_FIELD_WIDTH 100
 #define MAX_FIELD_HEIGHT 50
 #define MAX_CELLS (MAX_FIELD_WIDTH * MAX_FIELD_HEIGHT)
-// каждый пришелец — отдельный процесс
+// каждый пришелец — отдельный клиент
 #define MAX_ALIENS 256
 // строй, пушка и пришельцы
 #define MAX_ACTORS (2 + MAX_ALIENS)
@@ -20,9 +19,7 @@
 #define ALIEN_SPACING_X 2
 #define ALIEN_TOP_ROW 1
 
-// паузу не задали: выберем сами по режиму вывода
-#define DELAY_AUTO (-1)
-#define DEFAULT_ANIMATION_DELAY_MS 150
+#define DEFAULT_DELAY_MS 150
 
 typedef enum {
     STRATEGY_HUNTER,   // идёт к ближайшей цели, стреляет с упреждением
@@ -39,8 +36,6 @@ typedef struct {
     int hp;
 } ShieldSpec;
 
-// параметры без указателей: структура целиком копируется в разделяемую память
-// и передаётся по каналу независимым процессам
 typedef struct {
     int width;
     int height;

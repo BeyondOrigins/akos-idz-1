@@ -15,15 +15,15 @@
 #define GLYPH_ALIEN_SHOT ':'
 #define GLYPH_HIT '*'
 
-void print_border(int width) {
-    putchar('+');
+void print_border(FILE* out, int width) {
+    fputc('+', out);
     for (int x = 0; x < width; x++) {
-        putchar('-');
+        fputc('-', out);
     }
-    puts("+");
+    fputs("+\n", out);
 }
 
-void print_field(const World* world) {
+void print_field(FILE* out, const World* world) {
     int width = world->width;
     int height = world->height;
     char* cells = malloc((size_t)(width * height));
@@ -61,195 +61,24 @@ void print_field(const World* world) {
         }
     }
 
-    print_border(width);
+    print_border(out, width);
     for (int y = 0; y < height; y++) {
-        putchar('|');
-        fwrite(&cells[y * width], 1, (size_t)width, stdout);
-        puts("|");
+        fputc('|', out);
+        fwrite(&cells[y * width], 1, (size_t)width, out);
+        fputs("|\n", out);
     }
-    print_border(width);
+    print_border(out, width);
     free(cells);
 }
 
-bool event_visible(const World* world, const Event* event) {
-    return !event->verbose || world->cfg.verbose;
-}
-
-// печатает не больше limit строк; если событий больше, пишет, сколько скрыто
-int print_events(const World* world, int limit) {
-    int visible = 0;
+void render_field(FILE* out, const World* world) {
+    fprintf(out, "Поле после такта %d, счёт %d\n", world->tick, world->score);
+    print_field(out, world);
     for (int i = 0; i < world->events.count; i++) {
-        if (event_visible(world, &world->events.items[i])) {
-            visible++;
-        }
+        fprintf(out, "%s\n", world->events.items[i].text);
     }
-    int shown = visible <= limit ? visible : limit - 1;
-    for (int i = 0, printed = 0; i < world->events.count && printed < shown; i++) {
-        const Event* event = &world->events.items[i];
-        if (event_visible(world, event)) {
-            printf("  - %s\n", event->text);
-            printed++;
-        }
+    if (world->events.dropped) {
+        fprintf(out, "Пропущено событий: %d\n", world->events.dropped);
     }
-    int lines = shown;
-    if (shown < visible) {
-        printf("  ... и ещё событий: %d\n", visible - shown);
-        lines++;
-    }
-    if (world->events.dropped > 0) {
-        printf("  ... не поместилось в журнал такта событий: %d\n", world->events.dropped);
-        lines++;
-    }
-    return lines;
-}
-
-// сколько событий влезет под полем, чтобы экран не прокручивался
-int animated_events_limit(const World* world) {
-    struct winsize size;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0) {
-        return world->events.count;
-    }
-    // 6 строк заняты: заголовок, две рамки, статус, пустая и строка курсора
-    int limit = size.ws_row - (world->height + 6);
-    return limit < 1 ? 1 : limit;
-}
-
-void render_header(const World* world, FILE* out) {
-    if (world->tick == 0) {
-        fprintf(out, "=== Начальное состояние ===\n");
-    } else {
-        fprintf(out, "=== Такт %d ===\n", world->tick);
-    }
-}
-
-void render_status(const World* world, FILE* out) {
-    fprintf(out,
-            "Счёт: %d | Жизни: %d | Снаряды: %d | Пришельцев: %d | Снарядов в полёте: %d | "
-            "Процессов: %d\n",
-            world->score, world->cannon.lives, world->cannon.ammo, world->aliens_alive,
-            world->shot_count, world->actors_running);
-}
-
-void render_tick(const World* world) {
-    // высота прошлого кадра: столько строк надо стереть
-    static int previous_lines = 0;
-
-    if (world->cfg.animate) {
-        // поднимаемся к началу прошлого кадра и стираем всё ниже;
-        // перенос строк на время кадра выключаем, иначе собьётся счёт строк
-        if (previous_lines > 0) {
-            printf("\033[%dA", previous_lines);
-        }
-        printf("\r\033[J\033[?7l");
-        render_header(world, stdout);
-        print_field(world);
-        render_status(world, stdout);
-        // события под полем: их число скачет, а поле должно стоять на месте
-        int event_lines = print_events(world, animated_events_limit(world));
-        printf("\033[?7h\n");
-        // заголовок + поле с рамками + статус + события + пустая строка
-        previous_lines = world->height + 5 + event_lines;
-    } else {
-        render_header(world, stdout);
-        print_events(world, world->events.count);
-        print_field(world);
-        render_status(world, stdout);
-        printf("\n");
-    }
-    fflush(stdout);
-}
-
-const char* outcome_text(Outcome outcome) {
-    switch (outcome) {
-        case OUTCOME_VICTORY:
-            return "победа — все пришельцы уничтожены";
-        case OUTCOME_CANNON_DESTROYED:
-            return "поражение — пушка уничтожена";
-        case OUTCOME_INVASION:
-            return "поражение — пришельцы достигли нижней границы";
-        case OUTCOME_TIMEOUT:
-            return "исчерпано предельное число тактов";
-        case OUTCOME_INTERRUPTED:
-            return "игра прервана (SIGINT)";
-        case OUTCOME_TERMINATED:
-            return "игра остановлена сигналом (SIGTERM или SIGHUP)";
-        case OUTCOME_ACTOR_LOST:
-            return "игра остановлена — процесс-участник аварийно завершился";
-        case OUTCOME_RUNNING:
-            break;
-    }
-    return "игра не завершена";
-}
-
-// доля в процентах; при нулевом знаменателе 0
-double percent(int part, int whole) {
-    return whole > 0 ? 100.0 * part / whole : 0.0;
-}
-
-void render_summary(const World* world, FILE* out) {
-    const Stats* stats = &world->stats;
-    fprintf(out, "=== Игра завершена ===\n");
-    fprintf(out, "Итог: %s\n", outcome_text(world->outcome));
-    fprintf(out, "Тактов: %d, счёт: %d, уничтожено пришельцев: %d из %d\n", world->tick,
-            world->score, world->alien_count - world->aliens_alive, world->alien_count);
-    fprintf(out, "Осталось жизней: %d, снарядов: %d\n", world->cannon.lives, world->cannon.ammo);
-
-    fprintf(out, "Статистика:\n");
-    fprintf(out, "  пушка: выстрелов %d, попаданий в пришельцев %d (точность %.1f%%), "
-                 "перемещений %d\n",
-            stats->cannon_shots, stats->cannon_hits,
-            percent(stats->cannon_hits, stats->cannon_shots), stats->cannon_moves);
-    fprintf(out, "  пришельцы: выстрелов %d, попаданий в пушку %d\n", stats->alien_shots,
-            stats->cannon_damage);
-    fprintf(out, "  уничтожено по типам:");
-    int types = world->cfg.extended ? ALIEN_TYPE_COUNT : 1;
-    for (int type = 0; type < types; type++) {
-        fprintf(out, "%s %s %d", type == 0 ? "" : ",", ALIEN_TYPES[type].name, stats->kills[type]);
-    }
-    fprintf(out, "\n");
-    fprintf(out, "  строй: сдвигов %d, спусков %d\n", stats->formation_steps,
-            stats->formation_descents);
-    fprintf(out, "  укрытия: попаданий %d, разрушено клеток %d\n", stats->shield_hits,
-            stats->shield_cells_destroyed);
-    fprintf(out, "  снаряды: столкновений встречных %d, покинули поле %d\n",
-            stats->shot_collisions, stats->shots_left_field);
-    fprintf(out, "  процессов-участников: %d, время работы: %.2f с\n", world->actor_count,
-            world->elapsed_sec);
-}
-
-// число символов UTF-8 (а не байтов) для выравнивания столбцов
-int utf8_length(const char* text) {
-    int length = 0;
-    for (const unsigned char* p = (const unsigned char*)text; *p != '\0'; p++) {
-        if ((*p & 0xC0) != 0x80) {
-            length++;
-        }
-    }
-    return length;
-}
-
-void render_processes(const World* world, FILE* out) {
-    fprintf(out, "Процессы-участники:\n");
-    fprintf(out, "  участник");
-    for (int pad = utf8_length("участник"); pad < 28; pad++) {
-        fputc(' ', out);
-    }
-    // printf выравнивает по байтам, а кириллица занимает по 2 байта на букву
-    fprintf(out, " %7s   команд  завершён\n", "pid");
-    for (int i = 0; i < world->actor_count; i++) {
-        const ActorSlot* slot = &world->actors[i];
-        char name[64];
-        actor_name(world, i, name, sizeof(name));
-        bool killed = slot->kind == ACTOR_ALIEN && !world->aliens[slot->alien_index].alive;
-        fprintf(out, "  %s", name);
-        for (int pad = utf8_length(name); pad < 28; pad++) {
-            fputc(' ', out);
-        }
-        if (slot->pid == 0) {
-            fprintf(out, " %7s %8s  не подключился\n", "-", "-");
-        } else {
-            fprintf(out, " %7d %8d  такт %d, %s\n", (int)slot->pid, slot->phases,
-                    slot->stop_tick, killed ? "пришелец уничтожен" : "конец игры");
-        }
-    }
+    fflush(out);
 }

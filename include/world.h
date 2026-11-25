@@ -99,6 +99,7 @@ typedef struct {
 } Projectile;
 
 typedef enum {
+    OUTCOME_DISCONNECTED,
     OUTCOME_RUNNING,           // в процессе игры
     OUTCOME_VICTORY,           // победа
     OUTCOME_CANNON_DESTROYED,  // проигрыш - пушка уничтожена
@@ -106,7 +107,6 @@ typedef enum {
     OUTCOME_TIMEOUT,           // исчерпано число тактов
     OUTCOME_INTERRUPTED,       // программа прервана через Ctrl + C (SIGINT)
     OUTCOME_TERMINATED,        // программа остановлена сигналом SIGTERM или SIGHUP
-    OUTCOME_ACTOR_LOST,        // процесс-участник аварийно завершился
 } Outcome;
 
 // что координатор поручает процессу-участнику
@@ -131,16 +131,14 @@ typedef enum {
 typedef struct {
     ActorKind kind;
     int alien_index;  // для пришельца: индекс в массиве aliens
-    Command command;  // последняя команда координатора
-    bool joined;      // процесс подключился к игре
     bool running;     // процесс работает и получает команды
-    pid_t pid;
+    char client[24];
+    int connections;
     int phases;       // сколько команд выполнил
     int stop_tick;    // на каком такте завершён
 } ActorSlot;
 
-// статистика игры; её пополняют несколько процессов, поэтому изменения
-// делаются только под семафором g_sems.stats_lock
+// статистика игры
 typedef struct {
     int formation_steps;       // сдвигов строя вбок
     int formation_descents;    // спусков строя
@@ -156,8 +154,6 @@ typedef struct {
     int kills[ALIEN_TYPE_COUNT];
 } Stats;
 
-// Состояние модели. В программах с разделяемой памятью структура целиком
-// лежит в ней, поэтому внутри нет указателей — только массивы
 typedef struct {
     Config cfg;
     int width;
@@ -186,7 +182,6 @@ typedef struct {
     ActorSlot actors[MAX_ACTORS];
     int actor_count;
     int actors_running;
-    pid_t coordinator_pid;
 
     Stats stats;
 

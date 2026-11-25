@@ -77,16 +77,14 @@ void init_actors(World* world) {
             slot->kind = ACTOR_ALIEN;
             slot->alien_index = i - ACTOR_ALIENS_BASE;
         }
-        slot->command = COMMAND_PLAN;
-        slot->joined = false;
         slot->running = false;
-        slot->pid = 0;
+        slot->client[0] = '\0';
+        slot->connections = 0;
         slot->phases = 0;
         slot->stop_tick = -1;
     }
 }
 
-// мир может лежать в разделяемой памяти, поэтому заполняется на месте
 void world_init(World* world, const Config* cfg) {
     world->cfg = *cfg;
     world->width = cfg->width;
@@ -124,7 +122,6 @@ void world_init(World* world, const Config* cfg) {
     world->events.dropped = 0;
 
     init_actors(world);
-    world->coordinator_pid = 0;
 
     memset(&world->stats, 0, sizeof(world->stats));
     clock_gettime(CLOCK_MONOTONIC, &world->started_at);

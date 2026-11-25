@@ -4,9 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "../include/render.h"
 #include "../include/signals.h"
-#include "../include/sync.h"
 #include "../include/world.h"
 
 // пауза между тактами делится на кусочки, чтобы быстро заметить сигнал остановки
@@ -40,9 +38,7 @@ void crush_shields(World* world) {
         unsigned char* shield = world_shield_at(world, alien->x, alien->y);
         if (*shield > 0) {
             *shield = 0;
-            sem_lock(g_sems.stats_lock);
             world->stats.shield_cells_destroyed++;
-            sem_unlock(g_sems.stats_lock);
             events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
                        "Пришелец #%d раздавил укрытие в (%d,%d)", alien->id, alien->x, alien->y);
         }
@@ -220,15 +216,11 @@ void resolve_collisions(World* world) {
             hits[i] = detect_hit(world, &world->shots[i]);
         }
     }
-    // статистику в это время никто, кроме координатора, не меняет,
-    // но правило одно: общая статистика меняется только под семафором
-    sem_lock(g_sems.stats_lock);
     for (int i = 0; i < world->shot_count; i++) {
         if (hits[i].kind != HIT_NONE) {
             apply_hit(world, &world->shots[i], hits[i]);
         }
     }
-    sem_unlock(g_sems.stats_lock);
 }
 
 // один шаг: снаряды сдвигаются на клетку (быстрые делают больше шагов)
@@ -247,9 +239,7 @@ void advance_shots(World* world, int step) {
         int y = shot->y + shot->dir;
         if (!world_in_bounds(world, shot->x, y)) {
             shot->active = false;
-            sem_lock(g_sems.stats_lock);
             world->stats.shots_left_field++;
-            sem_unlock(g_sems.stats_lock);
             events_add(&world->events, true, EVENT_NO_CELL, EVENT_NO_CELL,
                        "Снаряд %s #%d покинул поле", owner_text(shot), shot->id);
             continue;
@@ -299,20 +289,18 @@ bool aliens_reached_bottom(const World* world) {
     return false;
 }
 
-// процесс уничтоженного пришельца больше не нужен: завершаем его
 void stop_dead_aliens(World* world, const Backend* backend) {
     for (int i = 0; i < world->alien_count; i++) {
         int index = ACTOR_ALIENS_BASE + i;
         if (world->actors[index].running && !world->aliens[i].alive) {
             backend->stop_actor(backend->ctx, world, index);
             events_add(&world->events, false, EVENT_NO_CELL, EVENT_NO_CELL,
-                       "Процесс пришельца #%d (pid %d) завершён, работает процессов-участников: %d",
-                       world->aliens[i].id, (int)world->actors[index].pid, world->actors_running);
+                       "Клиенту пришельца #%d отправлена команда завершения, участников в игре: %d",
+                       world->aliens[i].id, world->actors_running);
         }
     }
 }
 
-// убираем лишнее, проверяем инварианты и не пора ли заканчивать
 void update_field(World* world, const Backend* backend) {
     world_remove_inactive_shots(world);
     stop_dead_aliens(world, backend);
@@ -329,35 +317,31 @@ void update_field(World* world, const Backend* backend) {
     }
 }
 
-void sleep_ms(int ms) {
-    if (ms <= 0) {
-        return;
+bool stop_requested(World* world) {
+    int sig = signals_stop_signal();
+    if (sig == 0) {
+        return false;
     }
-    struct timespec pause = {ms / 1000, (long)(ms % 1000) * 1000000L};
-    nanosleep(&pause, NULL);
+    world->outcome = sig == SIGINT ? OUTCOME_INTERRUPTED : OUTCOME_TERMINATED;
+    return true;
 }
 
-// пауза перед тактом; false, если пришёл сигнал остановки и такт начинать не надо
-bool pause_before_tick(World* world) {
+bool pause_before_tick(World* world, const Backend* backend) {
     int left = world->cfg.delay_ms;
-    for (;;) {
-        int sig = signals_stop_signal();
-        if (sig != 0) {
-            world->outcome = sig == SIGINT ? OUTCOME_INTERRUPTED : OUTCOME_TERMINATED;
+    do {
+        if (stop_requested(world)) {
             return false;
         }
-        if (left <= 0) {
-            return true;
-        }
         int slice = left < PAUSE_SLICE_MS ? left : PAUSE_SLICE_MS;
-        sleep_ms(slice);
+        backend->wait(backend->ctx, world, slice);
         left -= slice;
-    }
+    } while (left > 0);
+    return !stop_requested(world);
 }
 
-void publish_tick(World* world) {
+void publish_tick(World* world, const Backend* backend) {
     events_sort(&world->events);
-    render_tick(world);
+    backend->publish(backend->ctx, world);
 }
 
 void field_stop_all(World* world, const Backend* backend) {
@@ -369,32 +353,28 @@ void field_stop_all(World* world, const Backend* backend) {
 }
 
 void field_run(World* world, const Backend* backend) {
-    publish_tick(world);
+    publish_tick(world, backend);
 
     while (world->outcome == OUTCOME_RUNNING) {
-        if (!pause_before_tick(world)) {
+        if (!pause_before_tick(world, backend)) {
             break;
         }
         world->tick++;
         events_clear(&world->events);
 
-        // фаза 1: все участники в своих процессах решают, что делать; мир не меняется
-        // фаза 2: каждый процесс применяет своё решение к своим данным
         if (!backend->run_phase(backend->ctx, world, COMMAND_PLAN) ||
             !backend->run_phase(backend->ctx, world, COMMAND_MOVE)) {
-            world->outcome = OUTCOME_ACTOR_LOST;
-            publish_tick(world);
+            world->tick--;
+            stop_requested(world);
             break;
         }
 
-        // фазы 3-5 выполняет координатор, процессы участников в это время ждут
         crush_shields(world);
         spawn_shots(world);
         move_shots(world);
         update_field(world, backend);
 
-        // поле показываем, только когда такт полностью отработал
-        publish_tick(world);
+        publish_tick(world, backend);
     }
 
     field_stop_all(world, backend);
@@ -404,15 +384,14 @@ void field_run(World* world, const Backend* backend) {
                          (double)(now.tv_nsec - world->started_at.tv_nsec) / 1e9;
 }
 
-// по сигналу принято 128 + номер сигнала
 int outcome_exit_code(Outcome outcome) {
     switch (outcome) {
+        case OUTCOME_DISCONNECTED:
+            return EXIT_FAILURE;
         case OUTCOME_INTERRUPTED:
             return 128 + SIGINT;
         case OUTCOME_TERMINATED:
             return 128 + SIGTERM;
-        case OUTCOME_ACTOR_LOST:
-            return EXIT_FAILURE;
         default:
             return EXIT_SUCCESS;
     }

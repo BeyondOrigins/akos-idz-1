@@ -2,7 +2,6 @@
 
 #include <stdlib.h>
 
-#include "../include/sync.h"
 #include "../include/world.h"
 
 void formation_plan(World* world) {
@@ -65,11 +64,9 @@ void formation_move(World* world) {
                         EVENT_NO_CELL, "Строй сместился на %d %s", abs(formation->dx),
                         formation->dx > 0 ? "вправо" : "влево");
     }
-    sem_lock(g_sems.stats_lock);
     if (formation->dy != 0) {
         world->stats.formation_descents++;
     } else {
         world->stats.formation_steps++;
     }
-    sem_unlock(g_sems.stats_lock);
 }
